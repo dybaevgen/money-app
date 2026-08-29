@@ -416,6 +416,7 @@ function bindInteractiveCharts(){
     const data=chartRegistry.get(el.dataset.chartId); if(!data?.length)return;
     const svg=$('svg',el), cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
     let activePointer=null;
+    const hide=()=>{ if(cursor)cursor.classList.add('hidden'); if(dot)dot.classList.add('hidden'); if(tip)tip.classList.add('hidden'); };
     const show=(clientX)=>{
       const rect=svg.getBoundingClientRect();
       const vb=svg.viewBox.baseVal, pl=56, pr=18, pt=16, pb=34;
@@ -430,7 +431,7 @@ function bindInteractiveCharts(){
       const y=pt+(max-(Number(d.value)||0))/(max-min)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
-      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)&&idx>0?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}`;
+      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}`;
       const pct=x/vb.width*100; tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
     el.addEventListener('pointerdown',e=>{
@@ -446,10 +447,15 @@ function bindInteractiveCharts(){
       show(e.clientX);
     },{passive:false});
     const finish=e=>{
-      if(activePointer===e.pointerId){try{el.releasePointerCapture(e.pointerId)}catch(_){} activePointer=null;}
+      if(activePointer===null || activePointer===e.pointerId){
+        if(activePointer===e.pointerId){ try{el.releasePointerCapture(e.pointerId)}catch(_){} }
+        activePointer=null;
+        hide();
+      }
     };
     el.addEventListener('pointerup',finish);
     el.addEventListener('pointercancel',finish);
+    el.addEventListener('pointerleave',e=>{ if(e.pointerType==='mouse' && activePointer===null) hide(); });
   });
 }
 
@@ -522,7 +528,7 @@ function renderOverview(){
       <button class="quick-action" data-action="quick-expense"><span>−</span><small>Расход</small></button>
       <button class="quick-action" data-action="quick-income"><span>＋</span><small>Доход</small></button>
       <button class="quick-action" data-action="quick-transfer"><span>⇄</span><small>Перевод</small></button>
-      <button class="quick-action" data-action="quick-plan"><span>◷</span><small>План</small></button>
+      <button class="quick-action" data-action="quick-plan"><span>⌚︎</span><small>План</small></button>
     </div>
     <section class="section">
       <div class="section-head"><h2>Этот месяц</h2></div>
@@ -897,6 +903,14 @@ function bindShell(){
   $('#privacyToggle').onclick=async()=>{state.settings.privacy=!state.settings.privacy;$('#privacyIcon').textContent=state.settings.privacy?'◌':'◉';await persist();render()};
   $('#importInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)handleImport(f);e.target.value=''})
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
+  document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
+  let lastTouchEnd=0;
+  document.addEventListener('touchend',e=>{
+    const now=Date.now();
+    if(now-lastTouchEnd<320){ e.preventDefault(); }
+    lastTouchEnd=now;
+  },{passive:false});
+  ['gesturestart','gesturechange','gestureend'].forEach(name=>document.addEventListener(name,e=>e.preventDefault(),{passive:false}));
 }
 
 async function init(){

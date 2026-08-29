@@ -1,4 +1,4 @@
-const CACHE = 'money-pwa-v1.0.0';
+const CACHE = 'money-pwa-v2.0.0';
 const ASSETS = [
   './',
   './index.html',
@@ -24,11 +24,20 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE).then(cache => cache.put(event.request, copy));
-      return response;
-    }).catch(() => caches.match('./index.html')))
-  );
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith((async () => {
+    try {
+      const fresh = await fetch(event.request);
+      const cache = await caches.open(CACHE);
+      cache.put(event.request, fresh.clone());
+      return fresh;
+    } catch (error) {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      if (event.request.mode === 'navigate') return caches.match('./index.html');
+      throw error;
+    }
+  })());
 });

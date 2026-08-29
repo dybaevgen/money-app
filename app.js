@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.3.0';
+const APP_VERSION = '4.4.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -953,8 +953,13 @@ function animateNumberElements(root=$('#main')){
   }
   if(!root) return;
 
-  const nodes=$$('.capital-value,.month-outlook-main strong,.item-amount,.kpi strong,.stats-hero strong,.month-summary-line strong,.money-status strong,.mini-stat strong',root)
-    .filter(el=>parseMoneyText(el.textContent)!==null);
+  const nodes=$$('strong,.capital-value,.item-amount,.timeline-money,.month-outlook-main strong,.kpi strong,.stats-hero strong,.month-summary-line strong,.money-status strong,.mini-stat strong,.budget-top strong,.budget-bottom span,.goal-overview strong',root)
+    .filter((el,index,arr)=>{
+      if(parseMoneyText(el.textContent)===null) return false;
+      // Animate only the most specific visible value, not a wrapper containing child values.
+      if([...el.children].some(child=>parseMoneyText(child.textContent)!==null)) return false;
+      return arr.indexOf(el)===index;
+    });
 
   // Each render represents a newly opened view. Values animate again only when
   // they actually enter the viewport, not while still below the fold.

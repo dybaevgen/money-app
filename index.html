@@ -10,7 +10,7 @@
   <link rel="manifest" href="./manifest.json" />
   <link rel="apple-touch-icon" href="./icons/icon-180.png" />
   <link rel="icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./style.css?v=4.3.0" />
+  <link rel="stylesheet" href="./style.css?v=4.4.0" />
   <title>Мои финансы</title>
 </head>
 <body>
@@ -27,7 +27,9 @@
 
     <main id="main" class="main"></main>
 
-    <nav class="bottom-nav bottom-dock" aria-label="Навигация">
+  </div>
+
+  <nav class="bottom-nav bottom-dock" aria-label="Навигация">
       <span class="nav-glider" aria-hidden="true"></span>
       <button class="nav-item active" data-tab="overview" data-nav-slot="0"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3.5 10.8 12 3.8l8.5 7v8.4a1.8 1.8 0 0 1-1.8 1.8h-4.4v-6.1H9.7V21H5.3a1.8 1.8 0 0 1-1.8-1.8Z"/></svg></span><small>Обзор</small></button>
       <button class="nav-item" data-tab="transactions" data-nav-slot="1"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3"/></svg></span><small>Операции</small></button>
@@ -36,13 +38,12 @@
       <button class="nav-item" data-tab="stats" data-nav-slot="4"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 19V12h3v7Zm5.5 0V5h3v14Zm5.5 0V9h3v10Z"/></svg></span><small>Статистика</small></button>
       <button class="nav-item" data-tab="more" data-nav-slot="5"><span class="nav-icon"><svg class="more-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></span><small>Ещё</small></button>
     </nav>
-  </div>
 
   <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
   <section id="sheet" class="sheet hidden" aria-modal="true" role="dialog"></section>
   <input id="importInput" type="file" accept="application/json,.json" hidden />
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=4.3.0" defer></script>
+  <script src="./app.js?v=4.4.0" defer></script>
 </body>
 </html>

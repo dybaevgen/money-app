@@ -2210,3 +2210,299 @@ body.sheet-open #sheetBackdrop{
     max-height:calc(100dvh - 70px)!important;
   }
 }
+
+
+/* =========================================================
+   V4.9 — Liquid Glass Dock
+   Stable V4.8 layer architecture retained.
+   The blur is static; only transform/opacity animate.
+   ========================================================= */
+
+body > .bottom-nav{
+  /* geometry */
+  height:76px!important;
+  min-height:76px!important;
+  padding:6px 8px!important;
+  border-radius:28px!important;
+
+  /* true glass */
+  background:
+    radial-gradient(120% 150% at 12% -25%,rgba(195,220,255,.13),transparent 48%),
+    radial-gradient(100% 130% at 88% 120%,rgba(104,139,255,.07),transparent 54%),
+    linear-gradient(180deg,rgba(35,43,59,.43),rgba(16,22,33,.48))!important;
+
+  -webkit-backdrop-filter:blur(26px) saturate(1.34)!important;
+  backdrop-filter:blur(26px) saturate(1.34)!important;
+
+  border:1px solid rgba(224,235,255,.16)!important;
+
+  box-shadow:
+    0 14px 38px rgba(0,0,0,.29),
+    0 3px 11px rgba(0,0,0,.18),
+    inset 0 1px 0 rgba(255,255,255,.22),
+    inset 0 -1px 0 rgba(255,255,255,.035)!important;
+
+  overflow:hidden!important;
+  isolation:isolate!important;
+}
+
+/* Main specular band — one continuous reflection across the glass. */
+body > .bottom-nav::before{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  z-index:0!important;
+  pointer-events:none!important;
+
+  left:11px!important;
+  right:11px!important;
+  top:1px!important;
+  height:48%!important;
+
+  border-radius:26px 26px 45% 45%!important;
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255,255,255,.12) 0%,
+      rgba(255,255,255,.045) 38%,
+      rgba(255,255,255,0) 100%
+    )!important;
+
+  opacity:1!important;
+  filter:none!important;
+}
+
+/* Edge refraction: thin irregular light along the lower glass edge. */
+body > .bottom-nav::after{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  z-index:0!important;
+  pointer-events:none!important;
+
+  left:9%!important;
+  right:9%!important;
+  bottom:-14px!important;
+  height:28px!important;
+
+  border-radius:50%!important;
+
+  background:
+    radial-gradient(
+      ellipse at 50% 15%,
+      rgba(107,150,255,.16),
+      rgba(92,123,203,.055) 42%,
+      transparent 70%
+    )!important;
+
+  filter:blur(10px)!important;
+  opacity:.72!important;
+}
+
+/* The dock is one surface. Tabs themselves never become cards. */
+body > .bottom-nav .nav-item,
+body > .bottom-nav .nav-item.active{
+  position:relative!important;
+  z-index:2!important;
+
+  height:60px!important;
+  padding:4px 1px!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+
+  color:rgba(191,202,222,.62)!important;
+}
+
+/* Kill all old nested tab surfaces from earlier versions. */
+body > .bottom-nav .nav-item::before,
+body > .bottom-nav .nav-item::after,
+body > .bottom-nav .nav-item.active::before,
+body > .bottom-nav .nav-item.active::after{
+  content:none!important;
+  display:none!important;
+}
+
+/* Quiet inactive state. */
+body > .bottom-nav .nav-item .nav-icon{
+  opacity:.82!important;
+  transform:translate3d(0,0,0)!important;
+  filter:none!important;
+
+  transition:
+    opacity var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform var(--motion-fast) cubic-bezier(.2,.8,.2,1)!important;
+}
+body > .bottom-nav .nav-item small{
+  opacity:.72!important;
+  color:inherit!important;
+  text-shadow:none!important;
+  transition:
+    opacity var(--motion-fast) ease,
+    color var(--motion-fast) ease!important;
+}
+
+/* Active state = luminous content, not a capsule. */
+body > .bottom-nav .nav-item.active{
+  color:#d8e5ff!important;
+}
+body > .bottom-nav .nav-item.active .nav-icon{
+  opacity:1!important;
+  color:#a9c3ff!important;
+  transform:translate3d(0,-1px,0)!important;
+  filter:
+    drop-shadow(0 0 5px rgba(129,169,255,.20))
+    drop-shadow(0 2px 7px rgba(85,125,230,.14))!important;
+}
+body > .bottom-nav .nav-item.active small{
+  opacity:1!important;
+  color:#dde7fb!important;
+}
+body > .bottom-nav .nav-item.active > small::after{
+  content:""!important;
+  display:block!important;
+  width:4px!important;
+  height:4px!important;
+  margin:4px auto 0!important;
+  border-radius:999px!important;
+  background:#9fbcff!important;
+  box-shadow:
+    0 0 5px rgba(137,174,255,.65),
+    0 0 11px rgba(110,151,255,.26)!important;
+}
+
+/* Central +: a liquid glass droplet, not a solid neon tile. */
+body > .bottom-nav #fab,
+body > .bottom-nav .nav-add{
+  position:relative!important;
+  z-index:3!important;
+
+  width:58px!important;
+  min-width:58px!important;
+  max-width:58px!important;
+  height:58px!important;
+  min-height:58px!important;
+  max-height:58px!important;
+
+  border-radius:21px!important;
+  overflow:hidden!important;
+
+  background:
+    radial-gradient(circle at 28% 16%,rgba(255,255,255,.35),transparent 26%),
+    radial-gradient(circle at 78% 90%,rgba(80,122,230,.22),transparent 46%),
+    linear-gradient(
+      145deg,
+      rgba(135,174,255,.50),
+      rgba(92,132,235,.40) 55%,
+      rgba(69,105,205,.35)
+    )!important;
+
+  border:1px solid rgba(225,236,255,.32)!important;
+
+  box-shadow:
+    0 10px 27px rgba(64,104,208,.25),
+    0 2px 8px rgba(0,0,0,.16),
+    inset 0 1px 0 rgba(255,255,255,.37),
+    inset 0 -1px 0 rgba(24,49,117,.16)!important;
+
+  -webkit-backdrop-filter:blur(10px) saturate(1.22)!important;
+  backdrop-filter:blur(10px) saturate(1.22)!important;
+}
+
+/* Refractive inner rim. */
+body > .bottom-nav #fab::before{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  pointer-events:none!important;
+
+  inset:3px!important;
+  border-radius:18px!important;
+  border:1px solid rgba(255,255,255,.12)!important;
+
+  background:
+    linear-gradient(
+      150deg,
+      rgba(255,255,255,.08),
+      transparent 42%,
+      rgba(126,164,255,.035)
+    )!important;
+}
+
+/* Remove the old glowing blob below the FAB. */
+body > .bottom-nav #fab::after{
+  content:none!important;
+  display:none!important;
+}
+
+body > .bottom-nav #fab span{
+  position:relative!important;
+  z-index:2!important;
+
+  font-size:37px!important;
+  font-weight:240!important;
+  line-height:.9!important;
+  color:rgba(255,255,255,.97)!important;
+
+  text-shadow:
+    0 1px 1px rgba(20,39,88,.18),
+    0 0 12px rgba(221,234,255,.12)!important;
+}
+
+/* Liquid press: only scale/translate, blur itself stays static. */
+body > .bottom-nav #fab.is-pressed,
+body > .bottom-nav #fab:active{
+  transform:scale(.91) translateY(1px)!important;
+  box-shadow:
+    0 6px 17px rgba(64,104,208,.20),
+    0 1px 5px rgba(0,0,0,.14),
+    inset 0 1px 0 rgba(255,255,255,.28)!important;
+}
+
+/* iPhone 16 Pro Max portrait: exact visual proportions. */
+@media (min-width:425px) and (max-width:455px) and (orientation:portrait){
+  body > .bottom-nav{
+    width:428px!important;
+    height:78px!important;
+    min-height:78px!important;
+    bottom:max(1px,env(safe-area-inset-bottom))!important;
+    padding:6px 9px!important;
+    grid-template-columns:
+      minmax(0,1fr)
+      minmax(0,1fr)
+      70px
+      minmax(0,1fr)
+      minmax(0,1fr)
+      minmax(0,1fr)!important;
+  }
+
+  body > .bottom-nav #fab,
+  body > .bottom-nav .nav-add{
+    width:59px!important;
+    min-width:59px!important;
+    max-width:59px!important;
+    height:59px!important;
+    min-height:59px!important;
+    max-height:59px!important;
+    border-radius:21px!important;
+  }
+
+  body > .bottom-nav #fab::before{
+    border-radius:18px!important;
+  }
+
+  body > .bottom-nav #fab span{
+    font-size:38px!important;
+  }
+}
+
+/* Sheet-open behavior from V4.8 remains authoritative.
+   Blur/background never animate; only the whole dock transforms. */
+body.sheet-open > .bottom-nav{
+  -webkit-backdrop-filter:blur(26px) saturate(1.34)!important;
+  backdrop-filter:blur(26px) saturate(1.34)!important;
+}

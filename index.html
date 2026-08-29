@@ -10,7 +10,7 @@
   <link rel="manifest" href="./manifest.json" />
   <link rel="apple-touch-icon" href="./icons/icon-180.png" />
   <link rel="icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./style.css?v=4.2.0" />
   <title>Мои финансы</title>
 </head>
 <body>
@@ -27,7 +27,7 @@
 
     <main id="main" class="main"></main>
 
-    <nav class="bottom-nav" aria-label="Навигация">
+    <nav class="bottom-nav bottom-dock" aria-label="Навигация">
       <span class="nav-glider" aria-hidden="true"></span>
       <button class="nav-item active" data-tab="overview" data-nav-slot="0"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3.5 10.8 12 3.8l8.5 7v8.4a1.8 1.8 0 0 1-1.8 1.8h-4.4v-6.1H9.7V21H5.3a1.8 1.8 0 0 1-1.8-1.8Z"/></svg></span><small>Обзор</small></button>
       <button class="nav-item" data-tab="transactions" data-nav-slot="1"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3"/></svg></span><small>Операции</small></button>
@@ -43,6 +43,6 @@
   <input id="importInput" type="file" accept="application/json,.json" hidden />
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js" defer></script>
+  <script src="./app.js?v=4.2.0" defer></script>
 </body>
 </html>

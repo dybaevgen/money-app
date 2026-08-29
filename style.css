@@ -1287,3 +1287,111 @@ html{--accent-soft:rgba(var(--accent-rgb),.14)}
 @media(max-width:520px){
   .bottom-nav{width:calc(100vw - 8px)!important;}
 }
+
+
+/* =========================================================
+   V4.2 HOTFIX — MAIN NAVIGATION IS ALWAYS A BOTTOM TAB BAR
+   Never convert this navigation into a sidebar.
+   ========================================================= */
+html, body {
+  overflow-x: hidden !important;
+}
+
+#app {
+  padding-left: 0 !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+.bottom-nav.bottom-dock,
+.bottom-nav {
+  position: fixed !important;
+  z-index: 999 !important;
+
+  top: auto !important;
+  right: auto !important;
+  left: 50% !important;
+
+  bottom: max(4px, env(safe-area-inset-bottom)) !important;
+
+  display: grid !important;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  grid-template-rows: 1fr !important;
+  align-items: stretch !important;
+
+  width: min(calc(100vw - 12px), 748px) !important;
+  max-width: calc(100vw - 12px) !important;
+  height: 72px !important;
+  min-height: 72px !important;
+  max-height: 72px !important;
+
+  margin: 0 !important;
+  padding: 5px 6px !important;
+
+  transform: translate3d(-50%, 0, 0) !important;
+  transform-origin: center bottom !important;
+
+  border-radius: 25px !important;
+  overflow: hidden !important;
+
+  flex-direction: row !important;
+  writing-mode: horizontal-tb !important;
+}
+
+.bottom-nav .nav-item,
+.bottom-nav .nav-add {
+  position: relative !important;
+  inset: auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+
+.bottom-nav .nav-item {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
+.bottom-nav .nav-glider {
+  position: absolute !important;
+  top: 5px !important;
+  bottom: 5px !important;
+  left: var(--nav-pad, 6px) !important;
+  width: calc((100% - (var(--nav-pad, 6px) * 2)) / 6) !important;
+}
+
+@media (min-width: 1px) {
+  .bottom-nav.bottom-dock,
+  .bottom-nav {
+    left: 50% !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: max(4px, env(safe-area-inset-bottom)) !important;
+    width: min(calc(100vw - 12px), 748px) !important;
+    height: 72px !important;
+    display: grid !important;
+    grid-template-columns: repeat(6, minmax(0,1fr)) !important;
+    grid-auto-flow: column !important;
+  }
+}
+
+@media (orientation: landscape) {
+  .bottom-nav.bottom-dock,
+  .bottom-nav {
+    left: 50% !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: max(4px, env(safe-area-inset-bottom)) !important;
+    width: min(calc(100vw - 18px), 748px) !important;
+    height: 68px !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
+  }
+}
+
+/* leave enough content space for the fixed bottom tab bar */
+#app {
+  padding-bottom: calc(92px + env(safe-area-inset-bottom)) !important;
+}

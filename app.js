@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '5.1.0';
+const APP_VERSION = '6.0.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -64,7 +64,7 @@ function accountGlyph(type){
 }
 
 const defaultState = () => ({
-  version: 4,
+  version: 6,
   settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
@@ -97,7 +97,8 @@ const defaultState = () => ({
   plans: [],
   planCompletions: [],
   budgets: [],
-  goals: []
+  goals: [],
+  scenarios: []
 });
 
 let state = defaultState();
@@ -107,6 +108,7 @@ let txSearch = '';
 let statsRange = 6;
 let planForecastRange = 12;
 let planScenario = { extraIncome:0, extraExpense:0, oneTimeExpense:0, oneTimeMonth:3 };
+let calendarCursor = new Date(new Date().getFullYear(),new Date().getMonth(),1,12);
 let toastTimer = null;
 const chartRegistry = new Map();
 let chartEntranceObserver = null;
@@ -198,25 +200,26 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:4,
+    version:6,
     settings:{
       ...d.settings,
       ...(s.settings||{}),
       lastAccountByType:{...(d.settings.lastAccountByType||{}),...((s.settings||{}).lastAccountByType||{})},
       lastCategoryByType:{...(d.settings.lastCategoryByType||{}),...((s.settings||{}).lastCategoryByType||{})}
     },
-    accounts:(Array.isArray(s.accounts)?s.accounts:d.accounts).map(a=>({...a,protected:Boolean(a.protected)})),
+    accounts:(Array.isArray(s.accounts)?s.accounts:d.accounts).map(a=>({...a,protected:Boolean(a.protected),lastReconciledAt:a.lastReconciledAt||null})),
     categories:Array.isArray(s.categories)?s.categories:d.categories,
     transactions:Array.isArray(s.transactions)?s.transactions:[],
     plans:Array.isArray(s.plans)?s.plans.map(p=>({
       ...p,
-      frequency:p.frequency==='monthly'?'monthly':'once',
+      frequency:['once','weekly','biweekly','monthly','quarterly','yearly'].includes(p.frequency)?p.frequency:'once',
       endDate:p.endDate||'',
       required:p.type==='expense' ? (p.required!==false) : false
     })):[],
     planCompletions:Array.isArray(s.planCompletions)?s.planCompletions:[],
     budgets:Array.isArray(s.budgets)?s.budgets:[],
-    goals:Array.isArray(s.goals)?s.goals.map(g=>({...g,targetDate:g.targetDate||''})):[]
+    goals:Array.isArray(s.goals)?s.goals.map(g=>({...g,targetDate:g.targetDate||''})):[],
+    scenarios:Array.isArray(s.scenarios)?s.scenarios.map(x=>({...x,scenario:{extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:3,...(x.scenario||{})}})):[]
   };
 }
 
@@ -299,47 +302,65 @@ function planEnd(plan){ return plan.endDate ? parseISO(plan.endDate) : null; }
 function lastDayOfMonth(year,month){ return new Date(year,month+1,0).getDate(); }
 function sameMonth(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth(); }
 
-function occurrenceInMonth(plan, monthDate){
-  if(!plan?.date) return null;
-  const start=planStart(plan);
-  const end=planEnd(plan);
-  if(plan.frequency==='once') return sameMonth(start,monthDate) ? start : null;
-  const monthStart=new Date(monthDate.getFullYear(),monthDate.getMonth(),1,12);
-  const monthEnd=new Date(monthDate.getFullYear(),monthDate.getMonth(),lastDayOfMonth(monthDate.getFullYear(),monthDate.getMonth()),12);
-  if(monthEnd<start || (end && monthStart>end)) return null;
-  const day=Math.min(start.getDate(),lastDayOfMonth(monthDate.getFullYear(),monthDate.getMonth()));
-  const occurrence=new Date(monthDate.getFullYear(),monthDate.getMonth(),day,12);
-  if(occurrence<start || (end && occurrence>end)) return null;
-  return occurrence;
+function frequencyLabel(freq){
+  return ({once:'один раз',weekly:'каждую неделю',biweekly:'каждые 2 недели',monthly:'каждый месяц',quarterly:'каждые 3 месяца',yearly:'каждый год'})[freq]||'один раз';
 }
-
-function recurringPlanMonthly(type, monthDate=new Date()){
-  return state.plans
-    .filter(p=>p.type===type && p.frequency==='monthly')
-    .map(p=>({p,date:occurrenceInMonth(p,monthDate)}))
-    .filter(x=>x.date && !isOccurrenceCompleted(x.p.id,x.date))
-    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+function anchoredMonthDate(start,monthOffset){
+  const target=new Date(start.getFullYear(),start.getMonth()+monthOffset,1,12);
+  const day=Math.min(start.getDate(),lastDayOfMonth(target.getFullYear(),target.getMonth()));
+  return new Date(target.getFullYear(),target.getMonth(),day,12);
 }
-
-function hasRecurringPlan(type){
-  return state.plans.some(p=>p.type===type && p.frequency==='monthly');
-}
-
-function oncePlansForMonth(type, monthDate){
-  return state.plans
-    .filter(p=>p.type===type && p.frequency==='once')
-    .map(p=>({p,date:occurrenceInMonth(p,monthDate)}))
-    .filter(x=>x.date && !isOccurrenceCompleted(x.p.id,x.date))
-    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
-}
-
-function planItemsForMonth(monthDate){
-  const items=[];
-  for(const p of state.plans){
-    const date=occurrenceInMonth(p,monthDate);
-    if(!date || isOccurrenceCompleted(p.id,date)) continue;
-    items.push({p,date});
+function occurrencesForPlanBetween(plan,start,end){
+  if(!plan?.date)return [];
+  const first=planStart(plan), stop=planEnd(plan);
+  const rangeStart=new Date(start);rangeStart.setHours(0,0,0,0);
+  const rangeEnd=new Date(end);rangeEnd.setHours(23,59,59,999);
+  const effectiveEnd=stop&&stop<rangeEnd?stop:rangeEnd;
+  if(first>effectiveEnd)return [];
+  const out=[];
+  const push=d=>{if(d>=rangeStart&&d<=effectiveEnd)out.push(new Date(d))};
+  if(plan.frequency==='once'){push(first);return out}
+  if(plan.frequency==='weekly'||plan.frequency==='biweekly'){
+    const step=plan.frequency==='weekly'?7:14;
+    let d=new Date(first);
+    if(d<rangeStart){
+      const diff=Math.floor((rangeStart-d)/86400000);
+      const jumps=Math.max(0,Math.floor(diff/step));
+      d.setDate(d.getDate()+jumps*step);
+      while(d<rangeStart)d.setDate(d.getDate()+step);
+    }
+    while(d<=effectiveEnd){push(d);d=new Date(d);d.setDate(d.getDate()+step)}
+    return out;
   }
+  const monthStep=plan.frequency==='quarterly'?3:plan.frequency==='yearly'?12:1;
+  let i=0,d=new Date(first);
+  if(d<rangeStart){
+    const months=(rangeStart.getFullYear()-first.getFullYear())*12+(rangeStart.getMonth()-first.getMonth());
+    i=Math.max(0,Math.floor(months/monthStep)-1);
+    d=anchoredMonthDate(first,i*monthStep);
+    while(d<rangeStart){i++;d=anchoredMonthDate(first,i*monthStep)}
+  }
+  while(d<=effectiveEnd){push(d);i++;d=anchoredMonthDate(first,i*monthStep)}
+  return out;
+}
+function occurrenceInMonth(plan,monthDate){
+  const a=new Date(monthDate.getFullYear(),monthDate.getMonth(),1,0);
+  const b=endOfMonth(monthDate);
+  return occurrencesForPlanBetween(plan,a,b)[0]||null;
+}
+function recurringPlanMonthly(type, monthDate=new Date()){
+  const start=new Date(monthDate.getFullYear(),monthDate.getMonth(),1,0),end=endOfMonth(monthDate);
+  return state.plans.filter(p=>p.type===type&&p.frequency!=='once').reduce((sum,p)=>sum+occurrencesForPlanBetween(p,start,end).filter(d=>!isOccurrenceCompleted(p.id,d)).length*Number(p.amount||0),0);
+}
+function hasRecurringPlan(type){return state.plans.some(p=>p.type===type&&p.frequency!=='once')}
+function oncePlansForMonth(type,monthDate){
+  const start=new Date(monthDate.getFullYear(),monthDate.getMonth(),1,0),end=endOfMonth(monthDate);
+  return state.plans.filter(p=>p.type===type&&p.frequency==='once').reduce((sum,p)=>sum+occurrencesForPlanBetween(p,start,end).filter(d=>!isOccurrenceCompleted(p.id,d)).length*Number(p.amount||0),0);
+}
+function planItemsForMonth(monthDate){
+  const start=new Date(monthDate.getFullYear(),monthDate.getMonth(),1,0),end=endOfMonth(monthDate);
+  const items=[];
+  state.plans.forEach(p=>occurrencesForPlanBetween(p,start,end).forEach(date=>{if(!isOccurrenceCompleted(p.id,date))items.push({p,date})}));
   return items.sort((a,b)=>a.date-b.date);
 }
 
@@ -531,34 +552,17 @@ function forecastHealth(series){
 }
 
 function nextOccurrence(plan, from=new Date()){
-  const start=planStart(plan);
-  const end=planEnd(plan);
-  const f=new Date(from); f.setHours(0,0,0,0);
-  if(plan.frequency==='once') return start>=f && (!end || start<=end) && !isOccurrenceCompleted(plan.id,start) ? start : null;
-  for(let i=0;i<=72;i++){
-    const md=addMonths(f,i);
-    const occ=occurrenceInMonth(plan,md);
-    if(occ && occ>=f && !isOccurrenceCompleted(plan.id,occ)) return occ;
-    if(end && new Date(md.getFullYear(),md.getMonth(),1,12)>end) break;
-  }
-  return null;
+  const f=new Date(from);f.setHours(0,0,0,0);
+  const horizon=new Date(f);horizon.setFullYear(horizon.getFullYear()+6);
+  return occurrencesForPlanBetween(plan,f,horizon).find(d=>!isOccurrenceCompleted(plan.id,d))||null;
 }
-
 function planOccurrencesBetween(start,end,{includeCompleted=false}={}){
   const out=[];
   for(const p of state.plans){
-    if(p.frequency==='once'){
-      const d=planStart(p);
-      if(d>=start && d<=end && (includeCompleted || !isOccurrenceCompleted(p.id,d))) out.push({p,date:d,completed:isOccurrenceCompleted(p.id,d)});
-      continue;
-    }
-    let cursor=new Date(start.getFullYear(),start.getMonth(),1,12);
-    const stop=new Date(end.getFullYear(),end.getMonth(),1,12);
-    while(cursor<=stop){
-      const d=occurrenceInMonth(p,cursor);
-      if(d && d>=start && d<=end && (includeCompleted || !isOccurrenceCompleted(p.id,d))) out.push({p,date:d,completed:isOccurrenceCompleted(p.id,d)});
-      cursor=addMonths(cursor,1);
-    }
+    occurrencesForPlanBetween(p,start,end).forEach(date=>{
+      const completed=isOccurrenceCompleted(p.id,date);
+      if(includeCompleted||!completed)out.push({p,date,completed});
+    });
   }
   return out.sort((a,b)=>a.date-b.date);
 }
@@ -681,16 +685,52 @@ function safeDailySpend(){
   const days=Math.max(1,Math.ceil((next.date-today)/86400000));
   return {amount:free/days,days,date:next.date,title:next.p.title||planCategory(next.p)?.name||'Следующий доход'};
 }
+function duplicateCandidates(){
+  const map=new Map();
+  state.transactions.filter(t=>t.type!=='transfer').forEach(t=>{
+    const key=[t.date,t.type,Number(t.amount||0).toFixed(2),t.accountId||'',t.categoryId||''].join('|');
+    const arr=map.get(key)||[];arr.push(t);map.set(key,arr);
+  });
+  return [...map.values()].filter(g=>g.length>1);
+}
+function unusualExpense(){
+  const vals=state.transactions.filter(t=>t.type==='expense').map(t=>Number(t.amount)||0).filter(v=>v>0).sort((a,b)=>a-b);
+  if(vals.length<6)return null;
+  const median=vals[Math.floor(vals.length/2)]||0;
+  return [...state.transactions].filter(t=>t.type==='expense'&&Number(t.amount)>Math.max(150,median*3.5)).sort((a,b)=>Number(b.amount)-Number(a.amount))[0]||null;
+}
+function accountsNeedingReconcile(){
+  const now=Date.now();
+  return state.accounts.filter(a=>{
+    const used=state.transactions.some(t=>t.accountId===a.id||t.toAccountId===a.id);
+    if(!used)return false;
+    if(!a.lastReconciledAt)return true;
+    return (now-Number(a.lastReconciledAt))/86400000>=30;
+  });
+}
+function financialInsights(){
+  const now=new Date();
+  const months=[2,1,0].map(i=>monthTotals(monthKey(addMonths(now,-i))));
+  const rising=months[0].expense>0&&months[1].expense>months[0].expense&&months[2].expense>months[1].expense;
+  const next=addMonths(now,1); const req=planItemsForMonth(next).filter(x=>x.p.type==='expense'&&x.p.required).reduce((s,x)=>s+Number(x.p.amount||0),0);
+  const inc=hasRecurringPlan('income')?recurringPlanMonthly('income',next):actualAverage('income');
+  const cats=expenseByCategory();
+  const out=[];
+  if(rising)out.push({title:'Расходы растут 3 месяца подряд',sub:`Последний месяц: ${fmtMajor(months[2].expense)}. Проверьте, это разовые траты или новый уровень расходов.`,tone:'warn'});
+  if(inc>0&&req>0)out.push({title:`${Math.round(req/inc*100)}% следующего дохода уже занято`,sub:`Обязательные платежи следующего месяца: ${fmtMajor(req)}.`,tone:req/inc>.7?'warn':'info'});
+  if(cats[0])out.push({title:`Главная категория месяца — ${cats[0].name}`,sub:`На неё ушло ${fmtMajor(cats[0].value)}.`,tone:'info'});
+  const h=monthlyCashflowHealth(forecastSeries(6).series);
+  if(h.hasDeficit)out.push({title:'В прогнозе есть дефицитный месяц',sub:`Для закрытия худшего разрыва нужно около ${fmtMajor(h.required)} дополнительного дохода в месяц.`,tone:'warn'});
+  else out.push({title:'Ближайшие 6 месяцев сбалансированы',sub:'В базовом прогнозе нет месяца, где расходы выше доходов.',tone:'good'});
+  return out.slice(0,4);
+}
+
 function attentionItems(){
   const items=[];
   const now=new Date();now.setHours(0,0,0,0);
-  const overdue=[];
-  for(const p of state.plans){
-    if(p.frequency==='once'){
-      const d=planStart(p);
-      if(d<now&&!isOccurrenceCompleted(p.id,d))overdue.push({p,date:d});
-    }
-  }
+  const overdueStart=new Date(now);overdueStart.setDate(overdueStart.getDate()-31);
+  const overdueEnd=new Date(now);overdueEnd.setDate(overdueEnd.getDate()-1);overdueEnd.setHours(23,59,59,999);
+  const overdue=planOccurrencesBetween(overdueStart,overdueEnd);
   if(overdue.length)items.push({id:'overdue',level:'warn',icon:'calendar',title:`Просрочено планов: ${overdue.length}`,sub:'Проведите, перенесите или удалите событие.',action:'open-overdue'});
   const over=budgetSnapshot().filter(b=>b.ratio>1);
   if(over.length)items.push({id:'budgets',level:'warn',icon:'chart',title:`Перерасход бюджетов: ${over.length}`,sub:`Самый большой — ${over[0].category?.name||'категория'}.`,action:'open-budgets'});
@@ -701,6 +741,12 @@ function attentionItems(){
   if(age!==null&&age>=10)items.push({id:'stale',level:'info',icon:'info',title:`Данные не обновлялись ${age} дн.`,sub:'Прогноз может быть менее точным.',action:'open-quick'});
   const backupAge=state.settings.lastBackupAt?Math.floor((Date.now()-state.settings.lastBackupAt)/86400000):null;
   if(state.transactions.length&&(backupAge===null||backupAge>=14))items.push({id:'backup',level:'info',icon:'upload',title:'Пора сделать резервную копию',sub:backupAge===null?'Копия ещё не создавалась.':`Последняя копия была ${backupAge} дн. назад.`,action:'export-json'});
+  const duplicates=duplicateCandidates();
+  if(duplicates.length)items.unshift({id:'duplicates',level:'warn',icon:'info',title:`Возможные дубликаты: ${duplicates.length}`,sub:'Одинаковые операции в один день. Проверьте, не записаны ли они дважды.',action:'open-duplicates'});
+  const staleAccounts=accountsNeedingReconcile();
+  if(staleAccounts.length)items.push({id:'reconcile',level:'info',icon:'wallet',title:`Сверьте счета: ${staleAccounts.length}`,sub:'Баланс этих счетов не сверялся более 30 дней или ещё не сверялся.',action:'open-reconcile'});
+  const unusual=unusualExpense();
+  if(unusual)items.push({id:'unusual',level:'info',icon:'chart',title:`Необычно крупная трата: ${fmtMajor(unusual.amount)}`,sub:`${category(unusual.categoryId)?.name||'Расход'} · ${fmtDate(unusual.date)}`,action:'open-unusual'});
   const review=state.transactions.filter(t=>t.needsReview).length;
   if(review)items.unshift({id:'review',level:'info',icon:'tag',title:`Нужно уточнить операций: ${review}`,sub:'Быстрые записи без точной категории.',action:'open-review'});
   return items;
@@ -735,8 +781,17 @@ function handleInboxAction(action){
   if(action==='open-review'){closeSheet();activeTab='transactions';txSearch='review:';render({motion:'none'});return}
   if(action==='open-budgets'){closeSheet();activeTab='plan';render({motion:'none'});setTimeout(()=>document.querySelector('[data-action="add-budget"]')?.scrollIntoView({behavior:'smooth',block:'center'}),100);return}
   if(action==='open-overdue'){closeSheet();activeTab='plan';render({motion:'none'});return}
+  if(action==='open-reconcile'){closeSheet();openAccountsManager();return}
+  if(action==='open-duplicates'){openDuplicateSheet();return}
+  if(action==='open-unusual'){const t=unusualExpense();if(t)openTransactionDetail(t);return}
   if(action==='explain-free')return openExplanation('free');
   if(action==='explain-cashflow')return openExplanation('cashflow');
+}
+
+function openDuplicateSheet(){
+  const groups=duplicateCandidates();
+  openSheet(`<div class="sheet-head"><h3>Возможные дубликаты</h3><button class="sheet-close">×</button></div>${groups.length?`<div class="duplicate-list">${groups.map(g=>`<div class="duplicate-group"><strong>${fmtDate(g[0].date)} · ${fmtMajor(g[0].amount)}</strong><small>${esc(category(g[0].categoryId)?.name||'Без категории')} · ${g.length} одинаковых записей</small>${g.map(t=>`<button data-dup-tx="${t.id}">${esc(t.note||t.merchant||'Операция')}<span>${esc(account(t.accountId)?.name||'')}</span></button>`).join('')}</div>`).join('')}</div>`:`<div class="empty-inline"><strong>Дубликатов не найдено</strong><span>Проверка не нашла одинаковых операций.</span></div>`}`);
+  $$('[data-dup-tx]').forEach(b=>b.onclick=()=>openTransactionDetail(state.transactions.find(t=>t.id===b.dataset.dupTx)));
 }
 
 function capitalMonthlySeries(count=6){
@@ -1201,7 +1256,7 @@ function eventRow({p,date}){
   const badge=p.type==='expense'&&p.required?'<span class="event-badge required">обяз.</span>':p.type==='income'?'<span class="event-badge income">доход</span>':'<span class="event-badge">план</span>';
   return `<div class="timeline-item" data-plan="${p.id}">
     <div class="timeline-date"><strong>${esc(day)}</strong><span>${esc(mon)}</span></div>
-    <div class="timeline-main"><div class="timeline-title">${esc(title)} ${badge}</div><div class="timeline-sub">${esc(a?.name||'Без счёта')}${p.frequency==='monthly'?' · ежемесячно':''}</div></div>
+    <div class="timeline-main"><div class="timeline-title">${esc(title)} ${badge}</div><div class="timeline-sub">${esc(a?.name||'Без счёта')}${p.frequency!=='once'?` · ${frequencyLabel(p.frequency)}`:''}</div></div>
     <div class="timeline-money ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div>
     <button class="event-done" data-complete-plan="${p.id}" data-complete-date="${iso}" aria-label="Провести операцию">${uiIcon("check")}</button>
   </div>`;
@@ -1330,7 +1385,7 @@ function txMatchesQuery(t,raw){
   if(monthToken && (t.date||'').slice(5,7)!==months[monthToken])return false;
   const cleaned=monthToken?q.replace(monthToken,'').trim():q;
   if(!cleaned)return true;
-  const hay=[t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
+  const hay=[t.merchant,t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
   return cleaned.split(/\s+/).every(part=>hay.includes(part));
 }
 function transactionGroups(txs){
@@ -1348,7 +1403,7 @@ function openTransactionDetail(t){
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
   openSheet(`<div class="sheet-head"><h3>Операция</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
     <div class="detail-hero"><small>${t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
-    <div class="detail-list">${t.type==='transfer'?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`:`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>`}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}</div>
+    <div class="detail-list">${t.type==='transfer'?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`:`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>`}${t.merchant?`<div><span>Получатель</span><strong>${esc(t.merchant)}</strong></div>`:''}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}</div>
     <div class="detail-actions"><button class="secondary-btn" id="detailRepeat">Повторить</button><button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
   $('#detailEdit').onclick=()=>openTransactionSheet(t,t.type);
   $('#detailRepeat').onclick=()=>openTransactionSheet(null,t.type,t);
@@ -1357,7 +1412,7 @@ function openTransactionDetail(t){
 function openAccountDetail(a){
   if(!a)return;
   const bal=accountBalance(a.id);const txs=state.transactions.filter(t=>t.accountId===a.id||t.toAccountId===a.id);
-  openSheet(`<div class="sheet-head"><h3>${esc(a.name)}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="detail-hero"><span class="detail-glyph">${accountGlyph(a.type)}</span><strong>${fmtMajor(bal)}</strong><span>${esc(accountTypeName(a.type))}${a.protected?' · защищённый':''}</span></div><div class="detail-list"><div><span>Операций</span><strong>${txs.length}</strong></div><div><span>Начальный остаток</span><strong>${fmt(a.openingBalance||0)}</strong></div></div><div class="detail-actions"><button class="secondary-btn" id="accountReconcile">Сверить баланс</button><button class="primary-btn" id="accountEdit">Настроить</button></div>`);
+  openSheet(`<div class="sheet-head"><h3>${esc(a.name)}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="detail-hero"><span class="detail-glyph">${accountGlyph(a.type)}</span><strong>${fmtMajor(bal)}</strong><span>${esc(accountTypeName(a.type))}${a.protected?' · защищённый':''}</span></div><div class="detail-list"><div><span>Операций</span><strong>${txs.length}</strong></div><div><span>Начальный остаток</span><strong>${fmt(a.openingBalance||0)}</strong></div><div><span>Последняя сверка</span><strong>${a.lastReconciledAt?fmtDate(toISODate(new Date(a.lastReconciledAt))):'никогда'}</strong></div></div><div class="detail-actions"><button class="secondary-btn" id="accountReconcile">Сверить баланс</button><button class="primary-btn" id="accountEdit">Настроить</button></div>`);
   $('#accountEdit').onclick=()=>openAccountSheet(a);
   $('#accountReconcile').onclick=()=>openReconcileSheet(a);
 }
@@ -1366,7 +1421,7 @@ function openReconcileSheet(a){
   openSheet(`<div class="sheet-head"><h3>Сверить баланс</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><form id="reconcileForm"><div class="field"><label>В приложении</label><input value="${esc(current.toFixed(2))}" disabled></div><div class="field"><label>Реальный баланс</label><input id="realBalance" name="real" type="number" step="0.01" inputmode="decimal" value="${esc(current.toFixed(2))}" required></div><div class="reconcile-preview" id="reconcilePreview">Разницы нет.</div><button class="primary-btn" type="submit">Сверить</button></form>`);
   const input=$('#realBalance'),preview=$('#reconcilePreview');
   const update=()=>{const real=Number(input.value);const diff=real-current;preview.textContent=Math.abs(diff)<.005?'Разницы нет.':`Корректировка: ${fmt(diff,true)}`;preview.className=`reconcile-preview ${diff<0?'negative':diff>0?'positive':''}`};input.oninput=update;update();
-  $('#reconcileForm').onsubmit=e=>{e.preventDefault();const real=Number(new FormData(e.currentTarget).get('real'));if(!Number.isFinite(real))return;const diff=real-current;if(Math.abs(diff)<.005){closeSheet();showToast('Баланс уже совпадает');return}const previous=structuredClone(state);state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:diff>0?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id),note:'Корректировка после сверки баланса',createdAt:Date.now()});closeSheet();render({motion:'refresh'});showToast(`Баланс скорректирован на ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})});persist().catch(()=>{state=previous;render({motion:'none'});showToast('Не удалось сохранить корректировку')})};
+  $('#reconcileForm').onsubmit=e=>{e.preventDefault();const real=Number(new FormData(e.currentTarget).get('real'));if(!Number.isFinite(real))return;const diff=real-current;if(Math.abs(diff)<.005){state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);persist();closeSheet();showToast('Баланс совпадает · счёт сверён');return}const previous=structuredClone(state);state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:diff>0?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id),note:'Корректировка после сверки баланса',createdAt:Date.now()});closeSheet();render({motion:'refresh'});showToast(`Баланс скорректирован на ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})});persist().catch(()=>{state=previous;render({motion:'none'});showToast('Не удалось сохранить корректировку')})};
 }
 function openPlanDetail(p){
   if(!p)return;
@@ -1420,9 +1475,9 @@ function renderTransactions(){
 
 function planRow(p,date=null){
   const c=planCategory(p), a=account(p.accountId); const d=date||nextOccurrence(p,new Date());
-  const repeat=p.frequency==='monthly'?(p.endDate?`каждый месяц · до ${fmtDate(p.endDate)}`:'каждый месяц · без окончания'):'один раз';
+  const repeat=p.frequency==='once'?'один раз':`${frequencyLabel(p.frequency)}${p.endDate?` · до ${fmtDate(p.endDate)}`:' · без окончания'}`;
   const onceDone=p.frequency==='once'&&isOccurrenceCompleted(p.id,planStart(p));
-  const when=onceDone?'проведено':d?fmtDate(toISODate(d)):(p.frequency==='monthly'&&p.endDate?'завершено':fmtDate(p.date));
+  const when=onceDone?'проведено':d?fmtDate(toISODate(d)):(p.frequency!=='once'&&p.endDate?'завершено':fmtDate(p.date));
   const req=p.type==='expense'&&p.required?' · обязательный':'';
   return `<button class="plan-item" data-plan="${p.id}" style="width:100%;color:inherit;text-align:left"><div class="plan-icon">${esc(c?.icon||(p.type==='income'?'＋':'−'))}</div><div class="item-main"><div class="item-title">${esc(p.title||c?.name||'План')}</div><div class="item-sub">${esc(when)} · ${esc(repeat)}${req}${a?` · ${esc(a.name)}`:''}</div></div><div class="item-amount ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div></button>`;
 }
@@ -1497,6 +1552,47 @@ function refreshPlanForecast(){
 }
 
 function scheduleForecastRefresh(){clearTimeout(forecastRefreshTimer);forecastRefreshTimer=setTimeout(refreshPlanForecast,90)}
+function calendarMonthHTML(cursor=calendarCursor){
+  const y=cursor.getFullYear(),m=cursor.getMonth();
+  const first=new Date(y,m,1,12),days=lastDayOfMonth(y,m),offset=(first.getDay()+6)%7;
+  const start=new Date(y,m,1,0),end=endOfMonth(first);
+  const events=planOccurrencesBetween(start,end,{includeCompleted:true});
+  const txs=state.transactions.filter(t=>(t.date||'').slice(0,7)===monthKey(first));
+  const cells=[];
+  for(let i=0;i<offset;i++)cells.push('<div class="cal-day empty"></div>');
+  for(let day=1;day<=days;day++){
+    const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const pe=events.filter(x=>toISODate(x.date)===iso), at=txs.filter(t=>t.date===iso);
+    const income=pe.filter(x=>x.p.type==='income'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+    const expense=pe.filter(x=>x.p.type==='expense'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+    const has=pe.length||at.length; const today=iso===todayISO();
+    cells.push(`<button class="cal-day ${has?'has-events':''} ${today?'today':''}" data-calendar-day="${iso}"><span>${day}</span>${has?`<i>${income>0?'<b class="inc"></b>':''}${expense>0?'<b class="exp"></b>':''}</i><small>${expense>0?`−${compactMoney(expense)}`:income>0?`+${compactMoney(income)}`:''}</small>`:''}</button>`);
+  }
+  const label=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(first);
+  return `<div class="finance-calendar"><div class="calendar-nav"><button data-calendar-shift="-1">‹</button><strong>${esc(label)}</strong><button data-calendar-shift="1">›</button></div><div class="calendar-weekdays">${['пн','вт','ср','чт','пт','сб','вс'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid">${cells.join('')}</div></div>`;
+}
+function openCalendarDay(iso){
+  const d=parseISO(iso),start=new Date(d);start.setHours(0,0,0,0);const end=new Date(d);end.setHours(23,59,59,999);
+  const plans=planOccurrencesBetween(start,end,{includeCompleted:true}); const txs=state.transactions.filter(t=>t.date===iso);
+  openSheet(`<div class="sheet-head"><h3>${esc(fmtDate(iso))}</h3><button class="sheet-close">×</button></div>${plans.length?`<div class="section-mini-title">План</div><div class="timeline list-surface">${plans.map(eventRow).join('')}</div>`:''}${txs.length?`<div class="section-mini-title">Факт</div><div class="tx-list list-surface">${txs.map(txRow).join('')}</div>`:''}${!plans.length&&!txs.length?'<div class="empty-inline"><strong>Событий нет</strong><span>На этот день ничего не запланировано и не записано.</span></div>':''}<button class="primary-btn" data-day-add-plan>Добавить план на этот день</button>`);
+  $$('[data-complete-plan]').forEach(b=>b.onclick=e=>{e.stopPropagation();completePlannedOccurrence(b.dataset.completePlan,b.dataset.completeDate)});
+  $$('[data-tx]').forEach(b=>b.onclick=()=>openTransactionDetail(state.transactions.find(t=>t.id===b.dataset.tx)));
+  $('[data-day-add-plan]')?.addEventListener('click',()=>{closeSheet();openPlanSheet(null,iso)});
+}
+function openSaveScenarioSheet(){
+  openSheet(`<div class="sheet-head"><h3>Сохранить сценарий</h3><button class="sheet-close">×</button></div><form id="scenarioSave"><div class="field"><label>Название</label><input name="name" required maxlength="40" placeholder="Например: Переезд"></div><div class="notice">Сохранится только What-if сценарий. Реальные операции и план не изменятся.</div><button class="primary-btn">Сохранить</button></form>`);
+  $('#scenarioSave').onsubmit=async e=>{e.preventDefault();const name=String(new FormData(e.currentTarget).get('name')||'').trim();if(!name)return;state.scenarios.push({id:uid(),name,scenario:{...planScenario}});await persist();closeSheet();render();showToast('Сценарий сохранён')};
+}
+function openScenarioManager(){
+  openSheet(`<div class="sheet-head"><h3>Сценарии</h3><button class="sheet-close">×</button></div>${state.scenarios.length?`<div class="scenario-manager">${state.scenarios.map(x=>`<div><button data-apply-scenario="${x.id}"><strong>${esc(x.name)}</strong><small>Доход +${fmtMajor(x.scenario.extraIncome||0)} · расход +${fmtMajor(x.scenario.extraExpense||0)}</small></button><button class="scenario-delete" data-delete-scenario="${x.id}">×</button></div>`).join('')}</div>`:'<div class="empty-inline"><strong>Сценариев пока нет</strong><span>Настройте «Что если?» и сохраните вариант.</span></div>'}`);
+  $$('[data-apply-scenario]').forEach(b=>b.onclick=()=>{const x=state.scenarios.find(s=>s.id===b.dataset.applyScenario);if(!x)return;planScenario={...x.scenario};closeSheet();activeTab='plan';render();showToast(`Сценарий «${x.name}» применён`)});
+  $$('[data-delete-scenario]').forEach(b=>b.onclick=async()=>{state.scenarios=state.scenarios.filter(x=>x.id!==b.dataset.deleteScenario);await persist();openScenarioManager()});
+}
+
+function renderPlanCalendarBindings(){
+  $$(`[data-calendar-day]`).forEach(b=>b.onclick=()=>openCalendarDay(b.dataset.calendarDay));
+  $$(`[data-calendar-shift]`).forEach(b=>b.onclick=()=>{calendarCursor=addMonths(calendarCursor,Number(b.dataset.calendarShift));const box=$('#calendarDynamic');if(box){box.innerHTML=calendarMonthHTML();renderPlanCalendarBindings()}});
+}
 function renderPlan(){
   chartRegistry.clear();
   const nextMonth=addMonths(new Date(),1);
@@ -1515,12 +1611,17 @@ function renderPlan(){
     </section>
 
     <section class="section">
+      <div class="section-head"><h2>Финансовый календарь</h2><span class="badge">план + факт</span></div>
+      <div id="calendarDynamic">${calendarMonthHTML()}</div>
+    </section>
+
+    <section class="section">
       <div class="section-head"><h2>Ближайшие события</h2><button class="round-section-action" data-action="all-events" aria-label="Показать события на 30 дней">＋</button></div>
       ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>Нет событий в основном окне</strong><span>${new Date().getDate()>=20?'Показывается остаток текущего и весь следующий месяц.':'Показывается остаток текущего месяца.'}</span></div>`}<p class="subtle-copy event-window-note">${new Date().getDate()>=20?'С 20-го числа здесь показывается остаток текущего месяца и весь следующий.':'Здесь показываются события до конца текущего месяца.'} Нажмите +, чтобы увидеть ближайшие 30 дней.</p>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Что если?</h2><button id="resetScenario">Сбросить</button></div>
+      <div class="section-head"><h2>Что если?</h2><div class="section-actions"><button id="saveScenario">Сохранить</button><button id="resetScenario">Сбросить</button></div></div>${state.scenarios.length?`<div class="saved-scenarios">${state.scenarios.slice(-4).map(x=>`<button data-scenario="${x.id}">${esc(x.name)}</button>`).join('')}<button data-action="manage-scenarios">•••</button></div>`:''}
       <div class="simulator-panel">
         <p class="section-note">Песочница не меняет реальный план.</p>
         <div class="scenario-grid">
@@ -1565,6 +1666,11 @@ function renderPlan(){
   const simExpense=$('#simExpense'); if(simExpense)simExpense.oninput=e=>{planScenario.extraExpense=Math.max(0,Number(e.target.value)||0);scheduleForecastRefresh()};
   const simOnce=$('#simOnce'); if(simOnce)simOnce.oninput=e=>{planScenario.oneTimeExpense=Math.max(0,Number(e.target.value)||0);scheduleForecastRefresh()};
   const simMonth=$('#simOnceMonth'); if(simMonth)simMonth.oninput=e=>{planScenario.oneTimeMonth=Math.min(planForecastRange,Number(e.target.value));scheduleForecastRefresh()};
+  $$('[data-calendar-shift]').forEach(b=>b.onclick=()=>{calendarCursor=addMonths(calendarCursor,Number(b.dataset.calendarShift));$('#calendarDynamic').innerHTML=calendarMonthHTML();renderPlanCalendarBindings()});
+  renderPlanCalendarBindings();
+  const saveScenario=$('#saveScenario');if(saveScenario)saveScenario.onclick=openSaveScenarioSheet;
+  $$('[data-scenario]').forEach(b=>b.onclick=()=>{const x=state.scenarios.find(s=>s.id===b.dataset.scenario);if(!x)return;planScenario={...x.scenario};render()});
+  $$('[data-action="manage-scenarios"]').forEach(b=>b.onclick=openScenarioManager);
   const reset=$('#resetScenario'); if(reset)reset.onclick=()=>{planScenario={extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:Math.min(3,planForecastRange)};['simIncome','simExpense','simOnce'].forEach(id=>{const el=$('#'+id);if(el)el.value=''});const sm=$('#simOnceMonth');if(sm)sm.value=String(planScenario.oneTimeMonth);refreshPlanForecast()};
 }
 
@@ -1603,6 +1709,7 @@ function renderStats(){
     <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">cash flow</span></div><div class="chart-surface"><div class="chart">${svgBars(monthly)}</div><div class="chart-legend"><span><i class="legend-income"></i>Доходы</span><span><i class="legend-expense"></i>Расходы</span></div></div></section>
     <section class="section"><div class="section-head"><h2>Капитал</h2><span class="badge">динамика</span></div><div class="chart-surface"><div class="chart">${svgLine(capital,{interactive:true})}</div></div></section>
     <section class="section"><div class="section-head"><h2>Куда уходят деньги</h2><span class="badge">месяц</span></div><div class="donut-surface">${donutHTML(cats)}</div></section>
+    <section class="section"><div class="section-head"><h2>Наблюдения</h2><span class="badge">локальный анализ</span></div><div class="insight-list">${financialInsights().map(x=>`<div class="insight-card ${x.tone}"><strong>${esc(x.title)}</strong><span>${esc(x.sub)}</span></div>`).join('')}</div></section>
 
     <section class="section"><div class="section-head"><h2>Показатели</h2></div><div class="insight-list list-surface">
       <div class="insight-row"><span>Средний расход · 90 дней</span><strong>${fmtMajor(avgExpense)}</strong></div>
@@ -1767,7 +1874,8 @@ function renderMore(){
 
     <section class="section"><div class="section-head"><h2>Интерфейс</h2></div>${rows([
       row('chart','Внешний вид и плавность',`${motionProfile().label} · ${state.settings.interfaceDensity==='compact'?'компактно':'стандартно'}`,'appearance'),
-      row('calendar','Итоги текущего месяца','Короткая сводка без лишних графиков','month-close')
+      row('calendar','Итоги текущего месяца','Короткая сводка без лишних графиков','month-close'),
+      row('sparkles','Сохранённые сценарии',`${state.scenarios.length} вариантов What-if`,'manage-scenarios')
     ])}</section>
 
     <section class="section"><div class="section-head"><h2>Данные</h2></div>${rows([
@@ -1782,7 +1890,7 @@ function renderMore(){
 
     <details class="tech-details section"><summary>Диагностика</summary><div class="diagnostics list-surface">
       <div><span>Версия приложения</span><strong>${APP_VERSION}</strong></div>
-      <div><span>Версия данных</span><strong>${state.version||4}</strong></div>
+      <div><span>Версия данных</span><strong>${state.version||6}</strong></div>
       <div><span>Операций</span><strong>${state.transactions.length}</strong></div>
       <div><span>Планов</span><strong>${state.plans.length}</strong></div>
       <div><span>Хранение</span><strong>IndexedDB · локально</strong></div>
@@ -1835,6 +1943,7 @@ function bindCommonActions(){
   $$('[data-action="appearance"]').forEach(b=>b.onclick=openAppearanceSettings);
   $$('[data-action="advanced-settings"]').forEach(b=>b.onclick=openAdvancedSettings);
   $$('[data-action="month-close"]').forEach(b=>b.onclick=openMonthCloseSheet);
+  $$('[data-action="manage-scenarios"]').forEach(b=>b.onclick=openScenarioManager);
   $$('[data-action="all-events"]').forEach(b=>b.onclick=openUpcomingEventsSheet);
   const reserve=$('[data-action="reserve"]'); if(reserve)reserve.onclick=openReserveSheet;
   const exj=$('[data-action="export-json"]'); if(exj)exj.onclick=exportJSON;
@@ -1918,7 +2027,7 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
             <div class="field"><label>Все категории</label><select id="categorySelectFull">${categoryOptions(type,defaultCategory)}</select></div>
             <div class="field"><label>Все счета</label><select id="accountSelectFull">${accountOptions(defaultAccount)}</select></div>
             <div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div>
-            <div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Например: REWE" value="${esc(t.note||'')}"></div>
+            <div class="field"><label>Получатель / магазин</label><input name="merchant" maxlength="60" placeholder="Например: REWE" value="${esc(t.merchant||'')}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Необязательно" value="${esc(t.note||'')}"></div>
           </div></details>`:`
           <div class="transfer-grid"><div class="field"><label>Откуда</label><select name="accountId">${accountOptions(defaultAccount)}</select></div><div class="transfer-arrow">${uiIcon('transfer')}</div><div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div></div>
           <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
@@ -1935,7 +2044,7 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       e.preventDefault(); const form=e.currentTarget; const fd=new FormData(form); const amount=Number(fd.get('amount'));
       setFormError(form,'');
       if(!amount||amount<=0){setFormError(form,'Введите сумму больше нуля.');$('#txAmount')?.focus();return}
-      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),note:String(fd.get('note')||'').trim(),needsReview:false,createdAt:existing?.createdAt||Date.now()};
+      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),merchant:type==='transfer'?'':String(fd.get('merchant')||'').trim(),note:String(fd.get('note')||'').trim(),needsReview:false,createdAt:existing?.createdAt||Date.now()};
       if(type==='transfer' && obj.accountId===obj.toAccountId){setFormError(form,'Для перевода выберите два разных счёта.');return}
       const previous=structuredClone(state);
       if(existing) state.transactions=state.transactions.map(x=>x.id===existing.id?obj:x); else state.transactions.push(obj);
@@ -1954,11 +2063,11 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
   }; build();
 }
 
-function openPlanSheet(existing=null){
+function openPlanSheet(existing=null,initialDate=null){
   if(!state.accounts.length){showToast('Сначала добавьте счёт');return}
   let type=existing?.type||'expense';
   const build=()=>{
-    const p=existing||{};
+    const p=existing||{date:initialDate||todayISO()};
     openSheet(`<div class="sheet-head"><h3>${existing?'Изменить план':'Новая плановая операция'}</h3><button class="sheet-close">×</button></div>
       <div class="segmented" style="grid-template-columns:1fr 1fr"><button data-plan-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-plan-type="income" class="${type==='income'?'active':''}">Доход</button></div>
       <form id="planForm"><div class="form-grid">
@@ -1966,24 +2075,24 @@ function openPlanSheet(existing=null){
         <div class="field full"><label>Сумма</label><input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal" value="${esc(p.amount||'')}"></div>
         <div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,p.categoryId)}</select></div>
         ${type==='expense'?`<label class="switch-row full"><input name="required" type="checkbox" ${p.required!==false?'checked':''}><span><strong>Обязательный платёж</strong><small>Учитывать при расчёте реально свободных денег</small></span></label>`:''}
-        <div class="field"><label>Повтор</label><select name="frequency" id="planFrequency"><option value="once" ${p.frequency!=='monthly'?'selected':''}>Один раз</option><option value="monthly" ${p.frequency==='monthly'?'selected':''}>Каждый месяц</option></select></div>
-        <div class="field"><label id="planDateLabel">${p.frequency==='monthly'?'Первый платёж':'Дата'}</label><input name="date" type="date" required value="${esc(p.date||todayISO())}"></div>
-        <div class="field full ${p.frequency==='monthly'?'':'hidden'}" id="planEndField"><label>Дата окончания <span class="field-hint">необязательно</span></label><input name="endDate" type="date" value="${esc(p.endDate||'')}"><small class="field-help">Оставьте пустым, если платёж идёт без ограничения по времени.</small></div>
+        <div class="field"><label>Повтор</label><select name="frequency" id="planFrequency">${[['once','Один раз'],['weekly','Каждую неделю'],['biweekly','Каждые 2 недели'],['monthly','Каждый месяц'],['quarterly','Каждые 3 месяца'],['yearly','Каждый год']].map(([v,n])=>`<option value="${v}" ${p.frequency===v||(!p.frequency&&v==='once')?'selected':''}>${n}</option>`).join('')}</select></div>
+        <div class="field"><label id="planDateLabel">${p.frequency&&p.frequency!=='once'?'Первый платёж':'Дата'}</label><input name="date" type="date" required value="${esc(p.date||todayISO())}"></div>
+        <div class="field full ${p.frequency&&p.frequency!=='once'?'':'hidden'}" id="planEndField"><label>Дата окончания <span class="field-hint">необязательно</span></label><input name="endDate" type="date" value="${esc(p.endDate||'')}"><small class="field-help">Оставьте пустым, если платёж идёт без ограничения по времени.</small></div>
         <div class="field full"><label>Счёт</label><select name="accountId">${accountOptions(p.accountId||state.accounts[0]?.id)}</select></div>
       </div><button class="primary-btn" type="submit">${existing?'Сохранить':'Добавить в план'}</button>${existing?'<button class="danger-btn" type="button" id="deletePlan">Удалить план</button>':''}</form>`);
     $$('[data-plan-type]').forEach(b=>b.onclick=()=>{type=b.dataset.planType;build()});
     const freq=$('#planFrequency');
     if(freq)freq.onchange=()=>{
-      const monthly=freq.value==='monthly';
-      $('#planEndField')?.classList.toggle('hidden',!monthly);
-      if($('#planDateLabel'))$('#planDateLabel').textContent=monthly?'Первый платёж':'Дата';
+      const recurring=freq.value!=='once';
+      $('#planEndField')?.classList.toggle('hidden',!recurring);
+      if($('#planDateLabel'))$('#planDateLabel').textContent=recurring?'Первый платёж':'Дата';
     };
     $('#planForm').onsubmit=async e=>{
       e.preventDefault();
       const fd=new FormData(e.currentTarget);
       const frequency=fd.get('frequency');
       const date=fd.get('date');
-      const endDate=frequency==='monthly'?String(fd.get('endDate')||''):'';
+      const endDate=frequency!=='once'?String(fd.get('endDate')||''):'';
       if(endDate && endDate<date){showToast('Дата окончания не может быть раньше начала');return}
       const obj={id:existing?.id||uid(),type,title:String(fd.get('title')).trim(),amount:Number(fd.get('amount')),categoryId:fd.get('categoryId'),frequency,date,endDate,accountId:fd.get('accountId'),required:type==='expense'?fd.get('required')==='on':false};
       if(existing)state.plans=state.plans.map(x=>x.id===existing.id?obj:x);else state.plans.push(obj);
@@ -2014,7 +2123,7 @@ function openAccountSheet(existing=null){
   </div><div class="notice">Иконка счёта теперь определяется автоматически по типу, чтобы интерфейс оставался единым.</div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button class="danger-btn" type="button" id="deleteAccount">Удалить счёт</button>':''}</form>`);
   $('#accountForm').onsubmit=async e=>{
     e.preventDefault();const fd=new FormData(e.currentTarget);
-    const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:existing?.icon||'💳',openingBalance:Number(fd.get('openingBalance')||0),protected:fd.get('protected')==='on'};
+    const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:existing?.icon||'💳',openingBalance:Number(fd.get('openingBalance')||0),protected:fd.get('protected')==='on',lastReconciledAt:existing?.lastReconciledAt||null};
     if(existing)state.accounts=state.accounts.map(x=>x.id===existing.id?obj:x);else state.accounts.push(obj);
     await persist();closeSheet();render();showToast('Счёт сохранён')
   };
@@ -2146,7 +2255,7 @@ async function init(){
   if('serviceWorker' in navigator){
     window.addEventListener('load',async()=>{
       try{
-        const reg=await navigator.serviceWorker.register('./service-worker.js?v=5.1.0',{updateViaCache:'none'});
+        const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.0.0',{updateViaCache:'none'});
         await reg.update();
         if(reg.waiting){
           showToast('Доступна новая версия','Обновить',()=>{

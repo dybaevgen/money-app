@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Финансы" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./style.css" />
+  <title>Мои финансы</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow" id="todayLabel"></div>
+        <h1 id="pageTitle">Обзор</h1>
+      </div>
+      <button class="icon-btn" id="privacyToggle" aria-label="Скрыть суммы" title="Скрыть суммы">
+        <span id="privacyIcon">◉</span>
+      </button>
+    </header>
+
+    <main id="main" class="main"></main>
+
+    <button id="fab" class="fab" aria-label="Добавить операцию">+</button>
+
+    <nav class="bottom-nav" aria-label="Навигация">
+      <button class="nav-item active" data-tab="overview"><span>⌂</span><small>Обзор</small></button>
+      <button class="nav-item" data-tab="transactions"><span>↕</span><small>Операции</small></button>
+      <button class="nav-item" data-tab="plan"><span>◷</span><small>План</small></button>
+      <button class="nav-item" data-tab="stats"><span>◫</span><small>Статистика</small></button>
+      <button class="nav-item" data-tab="more"><span>•••</span><small>Ещё</small></button>
+    </nav>
+  </div>
+
+  <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
+  <section id="sheet" class="sheet hidden" aria-modal="true" role="dialog"></section>
+  <input id="importInput" type="file" accept="application/json,.json" hidden />
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>

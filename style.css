@@ -1784,3 +1784,276 @@ body > .bottom-nav #fab:active{
 .app-version-card small{display:block;color:var(--muted);font-size:8px}
 .app-version-card strong{display:block;margin-top:1px;font-size:15px;letter-spacing:-.02em}
 .app-version-card span{display:block;margin-top:2px;color:var(--subtle);font-size:8px}
+
+
+/* =========================================================
+   V4.6 — Visual Refinement
+   Stable V4.5 architecture retained.
+   ========================================================= */
+
+:root{
+  --surface-0:#0a0e16;
+  --surface-1:rgba(255,255,255,.028);
+  --surface-2:rgba(255,255,255,.045);
+  --hairline:rgba(255,255,255,.075);
+}
+
+/* ---------- Dock: lower, lighter, more iOS-like ---------- */
+body > .bottom-nav{
+  bottom:max(2px,env(safe-area-inset-bottom))!important;
+  height:78px!important;
+  min-height:78px!important;
+  padding:6px 8px!important;
+  border-radius:27px!important;
+
+  background:
+    linear-gradient(180deg,rgba(29,37,53,.965),rgba(16,21,31,.978))!important;
+  border:1px solid rgba(198,213,255,.12)!important;
+
+  box-shadow:
+    0 12px 32px rgba(0,0,0,.30),
+    0 1px 4px rgba(0,0,0,.16),
+    inset 0 1px 0 rgba(255,255,255,.12)!important;
+}
+body > .bottom-nav::before{
+  height:42%!important;
+  opacity:.72!important;
+}
+body > .bottom-nav::after{
+  bottom:-7px!important;
+  height:16px!important;
+  opacity:.48!important;
+  filter:blur(9px)!important;
+}
+
+/* Smaller active state: elegant highlight, not a second card. */
+body > .bottom-nav .nav-item{
+  height:60px!important;
+  border-radius:18px!important;
+}
+body > .bottom-nav .nav-item::before{
+  inset:7px 5px!important;
+  border-radius:15px!important;
+  background:
+    radial-gradient(circle at 50% 0,rgba(155,185,255,.13),transparent 68%),
+    rgba(126,164,255,.038)!important;
+  border:1px solid rgba(180,203,255,.055)!important;
+  transform:scale(.95)!important;
+}
+body > .bottom-nav .nav-item.active::before{
+  transform:scale(1)!important;
+}
+body > .bottom-nav .nav-item.active{
+  color:#dde7fb!important;
+}
+body > .bottom-nav .nav-item.active .nav-icon{
+  filter:drop-shadow(0 2px 6px rgba(104,148,255,.20))!important;
+}
+body > .bottom-nav .nav-item small{
+  font-size:8.4px!important;
+  color:inherit!important;
+}
+
+/* FAB stays the hero, but less bulky. */
+body > .bottom-nav #fab,
+body > .bottom-nav .nav-add{
+  width:58px!important;
+  min-width:58px!important;
+  max-width:58px!important;
+  height:58px!important;
+  min-height:58px!important;
+  max-height:58px!important;
+  border-radius:21px!important;
+
+  box-shadow:
+    0 8px 22px rgba(74,115,225,.28),
+    0 1px 5px rgba(0,0,0,.18),
+    inset 0 1px 0 rgba(255,255,255,.36)!important;
+}
+body > .bottom-nav #fab::after{
+  bottom:-6px!important;
+  opacity:.58!important;
+}
+body > .bottom-nav #fab span{
+  font-size:37px!important;
+}
+
+/* Exact iPhone 16 Pro Max portrait. */
+@media (min-width:425px) and (max-width:455px) and (orientation:portrait){
+  body > .bottom-nav{
+    width:428px!important;
+    height:80px!important;
+    min-height:80px!important;
+    padding:6px 9px!important;
+    bottom:max(1px,env(safe-area-inset-bottom))!important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) 70px minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)!important;
+  }
+  body > .bottom-nav #fab,
+  body > .bottom-nav .nav-add{
+    width:60px!important;
+    min-width:60px!important;
+    max-width:60px!important;
+    height:60px!important;
+    min-height:60px!important;
+    max-height:60px!important;
+    border-radius:22px!important;
+  }
+  body > .bottom-nav #fab span{font-size:39px!important}
+}
+
+/* ---------- Page spacing / visual hierarchy ---------- */
+#app{
+  padding-bottom:calc(98px + env(safe-area-inset-bottom))!important;
+}
+#main{
+  padding-top:2px;
+}
+
+.section{
+  margin-top:18px;
+}
+.section-head{
+  margin-bottom:8px;
+}
+.section-head h2{
+  letter-spacing:-.025em;
+}
+
+/* ---------- Surfaces: fewer nested-card feelings ---------- */
+.card,
+.list-surface,
+.kpi,
+.plan-advice,
+.month-summary,
+.stats-hero,
+.forecast-card,
+.money-status{
+  border-color:rgba(255,255,255,.065)!important;
+  box-shadow:none!important;
+}
+.card,
+.month-summary,
+.stats-hero,
+.forecast-card,
+.money-status{
+  background:rgba(255,255,255,.026)!important;
+}
+.list-surface{
+  background:rgba(255,255,255,.018)!important;
+}
+
+/* Quiet nested cards. */
+.card .card,
+.plan-advice .deficit-month-card,
+.algorithm-analysis .analysis-row{
+  background:rgba(255,255,255,.018)!important;
+  border-color:rgba(255,255,255,.055)!important;
+}
+
+/* ---------- Typography ---------- */
+.capital-value{
+  letter-spacing:-.055em!important;
+  line-height:.96!important;
+}
+.hero-label,
+.eyebrow,
+.section small,
+.kpi small{
+  color:rgba(195,204,222,.62)!important;
+}
+.subtle-copy,
+.muted,
+.item-meta{
+  color:rgba(179,188,205,.54)!important;
+}
+
+/* ---------- Charts: lighter, more Stocks-like ---------- */
+.chart{
+  border-color:rgba(255,255,255,.045)!important;
+}
+.chart svg .grid-line,
+.chart svg [data-grid]{
+  opacity:.35!important;
+}
+.chart svg .area,
+.chart svg [data-area]{
+  opacity:.45!important;
+}
+.chart-tooltip{
+  background:rgba(19,25,36,.94)!important;
+  border:1px solid rgba(191,207,242,.11)!important;
+  box-shadow:0 12px 32px rgba(0,0,0,.28)!important;
+  border-radius:16px!important;
+}
+
+/* ---------- Sheets: deeper but still cheap ---------- */
+.sheet-backdrop{
+  background:rgba(2,5,10,.46)!important;
+}
+.sheet-panel,
+.sheet{
+  border-color:rgba(255,255,255,.10)!important;
+  box-shadow:
+    0 -18px 48px rgba(0,0,0,.30),
+    inset 0 1px 0 rgba(255,255,255,.08)!important;
+}
+
+/* Slight background depth when sheet is present, transform/opacity only. */
+body.sheet-open #app{
+  transform:scale(.988);
+  opacity:.93;
+  transition:
+    transform var(--motion-normal) cubic-bezier(.16,.82,.22,1),
+    opacity var(--motion-normal) ease;
+}
+body:not(.sheet-open) #app{
+  transform:scale(1);
+  opacity:1;
+  transition:
+    transform var(--motion-normal) cubic-bezier(.16,.82,.22,1),
+    opacity var(--motion-normal) ease;
+}
+
+/* ---------- Buttons/chips ---------- */
+.quick-btn,
+.chip,
+.segmented button,
+.secondary-btn{
+  border-color:rgba(255,255,255,.07)!important;
+}
+.quick-btn:active,
+.chip:active,
+.segmented button:active,
+.secondary-btn:active{
+  transform:scale(.97);
+}
+
+/* ---------- Version card ---------- */
+.app-version-card{
+  border-color:rgba(255,255,255,.06)!important;
+  background:
+    radial-gradient(circle at 0 0,rgba(126,167,255,.075),transparent 46%),
+    rgba(255,255,255,.018)!important;
+}
+
+/* ---------- Reduced visual noise ---------- */
+hr,
+.separator{
+  border-color:rgba(255,255,255,.055)!important;
+}
+
+/* Keep positive/negative semantics; accent stays decorative only. */
+.positive{color:var(--income)!important}
+.negative{color:var(--expense)!important}
+.warning{color:inherit}
+
+/* ---------- Motion quality ---------- */
+@media (prefers-reduced-motion:no-preference){
+  .nav-item,
+  .quick-btn,
+  .chip,
+  .secondary-btn,
+  .round-section-action{
+    transition-duration:var(--motion-fast)!important;
+  }
+}

@@ -1,9 +1,9 @@
-const CACHE = 'money-pwa-v4.5.0';
+const CACHE = 'money-pwa-v4.6.0';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=4.5.0',
-  './app.js?v=4.5.0',
+  './style.css?v=4.6.0',
+  './app.js?v=4.6.0',
   './manifest.json',
   './icons/icon-180.png',
   './icons/icon-192.png',

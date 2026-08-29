@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.5.0';
+const APP_VERSION = '4.6.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -930,13 +930,15 @@ function animateMoneyNode(el){
   }
 
   const startValue=0;
-  const startTime=performance.now();
-  // Deliberately short. This is a "live value" effect, not a loading animation.
-  const duration=Math.min(520,Math.max(300,motionMs(410)));
+  const delay=42;
+  const startTime=performance.now()+delay;
+  // Short, lively motion: quick climb, soft landing.
+  const duration=Math.min(500,Math.max(285,motionMs(390)));
 
   el.textContent=formatAnimatedMoney(0,original);
 
   const frame=now=>{
+    if(now<startTime){ requestAnimationFrame(frame); return; }
     const t=Math.min(1,(now-startTime)/duration);
     // Fast initial acceleration, soft landing.
     const eased=1-Math.pow(1-t,4);
@@ -1013,8 +1015,8 @@ function animateMainSurface(mode='refresh',direction=0){
       {opacity:1, transform:'translate3d(0,0,0)'}
     ],
     {
-      duration:motionMs(isTab?360:190),
-      easing:'cubic-bezier(.16,.78,.24,1)',
+      duration:motionMs(isTab?390:190),
+      easing:'cubic-bezier(.16,.82,.22,1)',
       fill:'both'
     }
   );

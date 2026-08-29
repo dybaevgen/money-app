@@ -667,3 +667,221 @@ body.app-loading .bottom-nav{opacity:0}
 }
 
 .gesture-hint{margin:10px 3px -14px;color:var(--subtle);font-size:9px;text-align:center;opacity:.78}
+
+/* =========================================================
+   V3.3 — high-FPS motion + interaction consistency
+   ========================================================= */
+:root{
+  --motion-instant:90ms;
+  --motion-fast:140ms;
+  --motion-base:190ms;
+  --motion-slow:280ms;
+  --ease-ui:cubic-bezier(.22,.74,.24,1);
+  --ease-spring:cubic-bezier(.18,.88,.22,1);
+}
+
+/* Prevent iOS selection/copy callouts on app chrome. Editable fields remain normal. */
+html,body,#app,#main,.topbar,.bottom-nav,.sheet,
+button,label,span,div,p,small,strong,h1,h2,h3,svg{
+  -webkit-user-select:none;
+  user-select:none;
+  -webkit-touch-callout:none;
+}
+input,textarea,[contenteditable="true"]{
+  -webkit-user-select:text;
+  user-select:text;
+  -webkit-touch-callout:default;
+}
+button,.nav-item,.nav-add,.choice-chip,.filter-chip,.plan-explain-toggle{
+  touch-action:manipulation;
+}
+
+/* V3.1/V3.2 had multiple simultaneous page animations. Keep one compositor animation only. */
+.main>*{animation:none!important}
+.main{
+  transition:none!important;
+  will-change:transform,opacity;
+  backface-visibility:hidden;
+  -webkit-backface-visibility:hidden;
+}
+.main.page-exit-left,.main.page-exit-right,.main.page-enter-left,.main.page-enter-right{
+  opacity:1!important;
+  transform:none!important;
+}
+
+/* Reduce expensive live blur while moving. */
+.topbar{
+  backdrop-filter:blur(12px) saturate(125%);
+  -webkit-backdrop-filter:blur(12px) saturate(125%);
+}
+.bottom-nav{
+  backdrop-filter:blur(18px) saturate(135%);
+  -webkit-backdrop-filter:blur(18px) saturate(135%);
+  transform:translate3d(-50%,0,0);
+  backface-visibility:hidden;
+  contain:paint;
+}
+.sheet-backdrop{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  background:rgba(0,0,0,.47);
+  transition:opacity var(--motion-base) ease!important;
+}
+
+/* Faster nav response: the indicator should follow the finger, not arrive later. */
+.nav-glider{
+  transition:transform 240ms var(--ease-spring),background var(--motion-base) ease!important;
+  will-change:transform;
+  backface-visibility:hidden;
+}
+.nav-item,
+.nav-item .nav-icon,
+.nav-item .nav-icon svg,
+.nav-item small{
+  transition:transform var(--motion-base) var(--ease-ui),color var(--motion-fast) ease,opacity var(--motion-fast) ease!important;
+}
+.nav-add{
+  transition:transform var(--motion-fast) var(--ease-ui),background var(--motion-fast) ease,filter var(--motion-fast) ease!important;
+  -webkit-touch-callout:none;
+}
+
+/* One motion language across interactive surfaces. */
+.card,.clean-surface,.list-surface,.forecast-panel,.simulator-panel,.chart-surface,.donut-surface,
+.account-item,.tx-item,.plan-item,.timeline-item,.goal-item,.goal-overview,.budget-overview,.list-button,
+.circle-link,.icon-btn,.primary-btn,.secondary-btn,.danger-btn,.event-done,
+.choice-chip,.filter-chip,.forecast-range-tabs button,.pill-tabs button,.quick-add-grid button{
+  transition:
+    transform var(--motion-fast) var(--ease-ui),
+    opacity var(--motion-fast) ease,
+    background-color var(--motion-base) ease,
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease!important;
+}
+.account-item:active,.plan-item:active,.timeline-item:active,.goal-overview:active,.budget-overview:active,.list-button:active{
+  background:rgba(255,255,255,.032);
+}
+
+/* Sheets: shorter travel and compositor-only movement. */
+.sheet{
+  transition:transform 300ms var(--ease-spring)!important;
+  backface-visibility:hidden;
+  -webkit-backface-visibility:hidden;
+  contain:paint;
+}
+.sheet-handle{transition:width var(--motion-fast) ease,background var(--motion-fast) ease!important}
+
+/* Inputs should visibly but softly react. */
+.field input,.field select,.field textarea,.scenario-grid input,.tx-search{
+  transition:border-color var(--motion-base) ease,box-shadow var(--motion-base) ease,background-color var(--motion-base) ease!important;
+}
+.segmented button,.forecast-range-tabs button,.pill-tabs button{
+  position:relative;
+  overflow:hidden;
+}
+
+/* Keep charts fluid without spending ~0.7 s animating every redraw. */
+.chart-line{animation-duration:390ms!important;animation-timing-function:var(--ease-ui)!important}
+.chart-area{animation-duration:300ms!important;animation-delay:50ms!important}
+.chart-event-dot,.chart-dot{animation-duration:180ms!important;animation-delay:130ms!important}
+.chart-tooltip{
+  transition:opacity 70ms linear,transform 100ms var(--ease-ui)!important;
+  will-change:transform,opacity;
+}
+
+/* Forecast explanation — concise by default, detailed on demand. */
+.plan-advice{
+  margin-top:12px;
+  border-radius:18px;
+  border:1px solid rgba(247,199,104,.15);
+  background:rgba(247,199,104,.055);
+  overflow:hidden;
+  transition:background-color var(--motion-base) ease,border-color var(--motion-base) ease!important;
+}
+.plan-advice-head{
+  min-height:70px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:13px 13px 13px 15px;
+}
+.plan-advice-head>div{min-width:0}
+.plan-advice-head small{
+  display:block;
+  color:#c3a868;
+  font-size:9px;
+  line-height:1.35;
+  margin-bottom:5px;
+}
+.plan-advice-head strong{
+  display:block;
+  color:var(--text);
+  font-size:14px;
+  line-height:1.3;
+  letter-spacing:-.02em;
+}
+.plan-explain-toggle{
+  flex:0 0 34px;
+  width:34px;height:34px;
+  padding:0;
+  border:1px solid rgba(247,199,104,.15);
+  border-radius:11px;
+  background:rgba(247,199,104,.07);
+  position:relative;
+  color:#e4c87e;
+}
+.plan-explain-toggle span{
+  position:absolute;
+  left:50%;top:50%;
+  width:12px;height:1.5px;
+  border-radius:2px;
+  background:currentColor;
+  transform:translate(-50%,-50%);
+  transition:transform 250ms var(--ease-spring),opacity var(--motion-fast) ease;
+}
+.plan-explain-toggle span+span{transform:translate(-50%,-50%) rotate(90deg)}
+.plan-advice.open .plan-explain-toggle span+span{transform:translate(-50%,-50%) rotate(0deg);opacity:0}
+.plan-advice-details{
+  display:grid;
+  grid-template-rows:0fr;
+  opacity:0;
+  transition:grid-template-rows 300ms var(--ease-spring),opacity 180ms ease;
+}
+.plan-advice-details>div{
+  min-height:0;
+  overflow:hidden;
+  padding:0 15px;
+}
+.plan-advice.open{
+  background:rgba(247,199,104,.072);
+  border-color:rgba(247,199,104,.20);
+}
+.plan-advice.open .plan-advice-details{
+  grid-template-rows:1fr;
+  opacity:1;
+}
+.plan-advice.open .plan-advice-details>div{padding-bottom:14px}
+.plan-advice-details p{
+  margin:0 0 8px;
+  color:var(--muted);
+  font-size:10.5px;
+  line-height:1.52;
+}
+.plan-advice-details p b{color:#d8dde6;font-weight:650}
+.plan-advice-details .plan-advice-meta{
+  margin:11px 0 0;
+  padding-top:10px;
+  border-top:1px solid rgba(255,255,255,.055);
+  color:var(--subtle);
+  font-size:9px;
+}
+
+/* Smoother intrinsic progress changes. */
+.budget-track i,.goal-progress i,.progress i{transition:width 420ms var(--ease-ui)!important}
+
+/* Avoid CSS smooth scrolling fighting touch momentum on iOS. */
+html{scroll-behavior:auto!important}
+
+@media (prefers-reduced-motion:reduce){
+  .main,.nav-glider,.sheet,.sheet-backdrop,.plan-advice-details,.plan-explain-toggle span{transition:none!important}
+}

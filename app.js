@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '3.2.0';
+const APP_VERSION = '3.3.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -564,37 +564,36 @@ function bindInteractiveCharts(){
   charts.forEach(el=>{
     const data=chartRegistry.get(el.dataset.chartId); if(!data?.length)return;
     const svg=$('svg',el), cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
-    let activePointer=null;
-    const hide=()=>{ if(cursor)cursor.classList.add('hidden'); if(dot)dot.classList.add('hidden'); if(tip)tip.classList.add('hidden'); };
+    let activePointer=null,lastIdx=-1,pendingX=null,moveRAF=0;
+    const vb=svg.viewBox.baseVal, pl=56, pr=18, pt=16, pb=34;
+    const values=data.map(x=>Number(x.value)||0);
+    let rawMin=Math.min(...values), rawMax=Math.max(...values);
+    const rawRange=Math.max(1,rawMax-rawMin);
+    let scaleMin=rawMin-rawRange*0.12, scaleMax=rawMax+rawRange*0.12;
+    const approxStep=Math.max(1,(scaleMax-scaleMin)/2);
+    const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
+    const norm=approxStep/mag, niceNorm=norm<=1?1:norm<=2?2:norm<=5?5:10, step=niceNorm*mag;
+    scaleMin=Math.floor(scaleMin/step)*step;scaleMax=Math.ceil(scaleMax/step)*step;
+    if(scaleMax===scaleMin){scaleMax+=step;scaleMin-=step}
+    const hide=()=>{ lastIdx=-1;if(cursor)cursor.classList.add('hidden'); if(dot)dot.classList.add('hidden'); if(tip)tip.classList.add('hidden'); };
     const show=(clientX)=>{
       const rect=svg.getBoundingClientRect();
-      const vb=svg.viewBox.baseVal, pl=56, pr=18, pt=16, pb=34;
       const scaleX=vb.width/Math.max(1,rect.width);
       const svgX=(clientX-rect.left)*scaleX;
       const plotX=Math.max(pl,Math.min(vb.width-pr,svgX));
       const ratio=(plotX-pl)/Math.max(1,(vb.width-pl-pr));
       const idx=Math.max(0,Math.min(data.length-1,Math.round(ratio*(data.length-1))));
+      if(idx===lastIdx)return;lastIdx=idx;
       const d=data[idx];
       const x=pl+(idx*(vb.width-pl-pr)/(Math.max(1,data.length-1)));
-      const values=data.map(x=>Number(x.value)||0);
-      let rawMin=Math.min(...values), rawMax=Math.max(...values);
-      const rawRange=Math.max(1, rawMax-rawMin);
-      let min=rawMin-rawRange*0.12, max=rawMax+rawRange*0.12;
-      const approxStep=Math.max(1,(max-min)/2);
-      const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
-      const norm=approxStep/mag;
-      const niceNorm=norm<=1?1:norm<=2?2:norm<=5?5:10;
-      const step=niceNorm*mag;
-      min=Math.floor(min/step)*step;
-      max=Math.ceil(max/step)*step;
-      if(max===min){max+=step;min-=step}
-      const y=pt+(max-(Number(d.value)||0))/(max-min)*(vb.height-pt-pb);
+      const y=pt+(scaleMax-(Number(d.value)||0))/(scaleMax-scaleMin)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
       const eventText=Array.isArray(d.events)&&d.events.length?`<em>${d.events.slice(0,2).map(x=>`${esc(x.title)} ${fmt(x.type==='income'?x.amount:-x.amount,true)}`).join('<br>')}${d.events.length>2?`<br>+ ещё ${d.events.length-2}`:''}</em>`:'';
       tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}${eventText}`;
-      const pct=x/vb.width*100; tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
+      const pct=x/vb.width*100;tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
+    const queueShow=clientX=>{pendingX=clientX;if(moveRAF)return;moveRAF=requestAnimationFrame(()=>{moveRAF=0;show(pendingX)})};
     el.addEventListener('pointerdown',e=>{
       hideAll();
       activePointer=e.pointerId;
@@ -606,18 +605,18 @@ function bindInteractiveCharts(){
       if(activePointer!==e.pointerId && e.pointerType!=='mouse')return;
       if(e.pointerType!=='mouse')e.preventDefault();
       if(e.pointerType==='mouse' && !e.buttons && activePointer===null)return;
-      show(e.clientX);
+      queueShow(e.clientX);
     },{passive:false});
     const finish=e=>{
       if(activePointer===null || activePointer===e.pointerId){
         if(activePointer===e.pointerId){ try{el.releasePointerCapture(e.pointerId)}catch(_){} }
-        activePointer=null;
+        activePointer=null;if(moveRAF){cancelAnimationFrame(moveRAF);moveRAF=0}
         hide();
       }
     };
     el.addEventListener('pointerup',finish);
     el.addEventListener('pointercancel',finish);
-    el.addEventListener('lostpointercapture',()=>{ activePointer=null; hide(); });
+    el.addEventListener('lostpointercapture',()=>{ activePointer=null;if(moveRAF){cancelAnimationFrame(moveRAF);moveRAF=0}hide(); });
     el.addEventListener('pointerleave',e=>{ if(e.pointerType==='mouse' && activePointer===null) hide(); });
   });
   document.addEventListener('pointerup', hideAll, {passive:true, once:true});
@@ -678,27 +677,37 @@ function pulseElement(el){
   el.animate([{transform:'scale(.97)'},{transform:'scale(1.015)'},{transform:'scale(1)'}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});
 }
 function tabIndex(tab){ return ['overview','transactions','plan','stats','more'].indexOf(tab); }
+function animateMainSurface(mode='refresh',direction=0){
+  const main=$('#main');
+  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if(main._motion) try{main._motion.cancel()}catch(_){}
+  const frames=mode==='tab'
+    ? [{opacity:.82,transform:`translate3d(${direction*12}px,0,0) scale(.997)`},{opacity:1,transform:'translate3d(0,0,0) scale(1)'}]
+    : [{opacity:.90,transform:'translate3d(0,3px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}];
+  main._motion=main.animate(frames,{
+    duration:mode==='tab'?185:145,
+    easing:'cubic-bezier(.22,.74,.24,1)',
+    fill:'both'
+  });
+  const motion=main._motion;
+  motion.onfinish=()=>{
+    if(main._motion===motion)main._motion=null;
+    try{motion.cancel()}catch(_){}
+    main.style.opacity='';main.style.transform='';
+  };
+}
+function animateLocalSurface(el){
+  if(!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if(el._motion) try{el._motion.cancel()}catch(_){}
+  el._motion=el.animate([{opacity:.72,transform:'translate3d(0,4px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],{duration:155,easing:'cubic-bezier(.22,.74,.24,1)'});
+}
 function switchTab(next){
   if(!next || next===activeTab) return;
   previousTab=activeTab;
   const oldIndex=tabIndex(activeTab), newIndex=tabIndex(next);
   activeTab=next;
-  const main=$('#main');
-  if(main){
-    main.classList.remove('page-enter-left','page-enter-right');
-    main.classList.add(newIndex>=oldIndex?'page-exit-left':'page-exit-right');
-  }
-  clearTimeout(pageTransitionTimer);
-  pageTransitionTimer=setTimeout(()=>{
-    render();
-    const m=$('#main');
-    if(m){
-      m.classList.remove('page-exit-left','page-exit-right');
-      m.classList.add(newIndex>=oldIndex?'page-enter-right':'page-enter-left');
-      requestAnimationFrame(()=>requestAnimationFrame(()=>m.classList.remove('page-enter-left','page-enter-right')));
-    }
-    window.scrollTo({top:0,behavior:'instant'});
-  },95);
+  window.scrollTo(0,0);
+  render({motion:'tab',direction:newIndex>=oldIndex?1:-1});
 }
 function installPressFeedback(root=document){
   $$('button,[role="button"]',root).forEach(el=>{
@@ -775,7 +784,7 @@ function updateNavGlider(){
   nav.style.setProperty('--nav-index',Number.isFinite(slot)?slot:0);
 }
 
-function render(){
+function render({motion='refresh',direction=0}={}){
   chartRegistry.clear();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
   updateNavGlider();
@@ -785,7 +794,7 @@ function render(){
   if(activeTab==='plan') renderPlan();
   if(activeTab==='stats') renderStats();
   if(activeTab==='more') renderMore();
-  requestAnimationFrame(enhanceRenderedUI);
+  requestAnimationFrame(()=>{enhanceRenderedUI();if(motion!=='none')animateMainSurface(motion,direction)});
 }
 
 function eventRow({p,date}){
@@ -955,9 +964,38 @@ function planForecastHTML(){
       <div class="kpi"><small>Минимум</small><strong class="${health.min>=0?'positive':'negative'}">${fmt(health.min)}</strong></div>
       <div class="kpi"><small>Изменение</small><strong class="${change>=0?'positive':'negative'}">${fmt(change,true)}</strong></div>
     </div>
-    ${health.cashflow.required>0?`<div class="zero-alert"><div class="zero-alert-icon">↗</div><div><small>В плане есть месяцы с отрицательным результатом</small><strong>Нужно зарабатывать ещё ${fmt(health.cashflow.required)} / месяц</strong><p>Это разница между доходами и расходами в самом дефицитном месяце выбранного периода. Показатель считается по месячному денежному потоку, даже если накоплений пока хватает.</p></div></div>`:`<div class="notice good">Месячный план сбалансирован: во всех месяцах выбранного периода доходы не ниже расходов. Минимальный расчётный капитал: <b>${fmt(health.min)}</b>.</div>`}`;
+    ${health.cashflow.required>0?(()=>{
+      const w=health.cashflow.worstDeficit;
+      const label=w?.tooltipLabel||w?.label||'самом дефицитном месяце';
+      const income=Number(w?.income)||0, expense=Number(w?.expense)||0, shortfall=Number(w?.shortfall)||health.cashflow.required;
+      return `<div class="plan-advice warning">
+        <div class="plan-advice-head">
+          <div><small>В выбранном периоде есть дефицитные месяцы</small><strong>Нужно зарабатывать ещё ${fmt(health.cashflow.required)} / месяц</strong></div>
+          <button class="plan-explain-toggle" type="button" aria-expanded="false" aria-label="Показать объяснение"><span></span><span></span></button>
+        </div>
+        <div class="plan-advice-details"><div>
+          <p><b>Почему именно ${fmt(health.cashflow.required)}?</b></p>
+          <p>Самый дефицитный месяц — <b>${esc(label)}</b>. По плану в нём приходит ${fmt(income)}, а уходит ${fmt(expense)}. Разница составляет <b>−${fmt(shortfall)}</b>.</p>
+          <p>Поэтому ${fmt(health.cashflow.required)} в месяц — минимальная дополнительная сумма, которая закрывает самый большой месячный дефицит в выбранных ${planForecastRange} месяцах.</p>
+          <p>Это <b>не означает</b>, что весь капитал станет отрицательным. Здесь сравниваются именно доходы и расходы каждого отдельного месяца; накопления считаются отдельно на графике капитала.</p>
+          <p class="plan-advice-meta">Дефицитных месяцев: ${health.cashflow.deficitMonths} из ${planForecastRange}.</p>
+        </div></div>
+      </div>`;
+    })():`<div class="notice good">Месячный план сбалансирован: во всех месяцах выбранного периода доходы не ниже расходов. Минимальный расчётный капитал: <b>${fmt(health.min)}</b>.</div>`}`;
 }
 
+function bindPlanAdvice(root=document){
+  $$('.plan-explain-toggle',root).forEach(btn=>{
+    if(btn.dataset.bound)return;btn.dataset.bound='1';
+    btn.onclick=()=>{
+      const card=btn.closest('.plan-advice');
+      const open=!card.classList.contains('open');
+      card.classList.toggle('open',open);
+      btn.setAttribute('aria-expanded',String(open));
+      btn.setAttribute('aria-label',open?'Скрыть объяснение':'Показать объяснение');
+    };
+  });
+}
 function refreshPlanForecast(){
   chartRegistry.clear();
   const box=$('#forecastDynamic'); if(!box)return;
@@ -967,6 +1005,9 @@ function refreshPlanForecast(){
   const onceLabel=$('#simOnceMonthLabel'); if(onceLabel)onceLabel.textContent=`через ${planScenario.oneTimeMonth} мес.`;
   const onceSlider=$('#simOnceMonth'); if(onceSlider){onceSlider.max=String(planForecastRange);onceSlider.value=String(planScenario.oneTimeMonth);}
   bindInteractiveCharts();
+  bindPlanAdvice(box);
+  installPressFeedback(box);
+  animateLocalSurface(box);
 }
 
 function renderPlan(){
@@ -1030,13 +1071,14 @@ function renderPlan(){
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
+  bindPlanAdvice($('#main'));
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
-  $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Math.min(18,Number(b.dataset.forecastRange));renderPlan()});
+  $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Math.min(18,Number(b.dataset.forecastRange));planScenario.oneTimeMonth=Math.min(planForecastRange,planScenario.oneTimeMonth);refreshPlanForecast()});
   const simIncome=$('#simIncome'); if(simIncome)simIncome.oninput=e=>{planScenario.extraIncome=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simExpense=$('#simExpense'); if(simExpense)simExpense.oninput=e=>{planScenario.extraExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simOnce=$('#simOnce'); if(simOnce)simOnce.oninput=e=>{planScenario.oneTimeExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simMonth=$('#simOnceMonth'); if(simMonth)simMonth.oninput=e=>{planScenario.oneTimeMonth=Math.min(planForecastRange,Number(e.target.value));refreshPlanForecast()};
-  const reset=$('#resetScenario'); if(reset)reset.onclick=()=>{planScenario={extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:Math.min(3,planForecastRange)};renderPlan()};
+  const reset=$('#resetScenario'); if(reset)reset.onclick=()=>{planScenario={extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:Math.min(3,planForecastRange)};['simIncome','simExpense','simOnce'].forEach(id=>{const el=$('#'+id);if(el)el.value=''});const sm=$('#simOnceMonth');if(sm)sm.value=String(planScenario.oneTimeMonth);refreshPlanForecast()};
 }
 
 function budgetRow(b){
@@ -1084,7 +1126,7 @@ function renderStats(){
     </div></section>
 
     ${budgets.length?`<section class="section"><div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Управлять</button></div><div class="budget-overview-list">${budgets.slice(0,4).map(budgetOverviewRow).join('')}</div></section>`:''}`;
-  $$('[data-range]').forEach(b=>b.onclick=()=>{statsRange=Number(b.dataset.range);renderStats()});
+  $$('[data-range]').forEach(b=>b.onclick=()=>{statsRange=Number(b.dataset.range);renderStats();requestAnimationFrame(()=>{enhanceRenderedUI();animateMainSurface('refresh',0)})});
   bindCommonActions();
   bindInteractiveCharts();
 }
@@ -1412,16 +1454,28 @@ function openQuickAddMenu(){
   });
 }
 
+
+function isEditableTarget(target){
+  return target instanceof Element && Boolean(target.closest('input,textarea,[contenteditable="true"]'));
+}
+document.addEventListener('contextmenu',e=>{if(!isEditableTarget(e.target))e.preventDefault()});
+document.addEventListener('selectstart',e=>{if(!isEditableTarget(e.target))e.preventDefault()});
+
 function bindShell(){
   $$('.nav-item').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
   const fab=$('#fab');
   if(fab){
-    let holdTimer=null,held=false;
-    fab.addEventListener('pointerdown',()=>{held=false;holdTimer=setTimeout(()=>{held=true;openQuickAddMenu()},520)});
+    let holdTimer=null,held=false,startX=0,startY=0,pointerId=null;
     const cancelHold=()=>{if(holdTimer){clearTimeout(holdTimer);holdTimer=null}};
-    fab.addEventListener('pointerup',()=>{cancelHold();if(!held)openTransactionSheet(null,'expense')});
-    fab.addEventListener('pointercancel',cancelHold);
-    fab.addEventListener('pointerleave',cancelHold);
+    fab.addEventListener('contextmenu',e=>e.preventDefault());
+    fab.addEventListener('pointerdown',e=>{
+      e.preventDefault();held=false;pointerId=e.pointerId;startX=e.clientX;startY=e.clientY;
+      try{fab.setPointerCapture(e.pointerId)}catch(_){}
+      holdTimer=setTimeout(()=>{held=true;holdTimer=null;pulseElement(fab);openQuickAddMenu()},430);
+    },{passive:false});
+    fab.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;if(Math.hypot(e.clientX-startX,e.clientY-startY)>10)cancelHold()},{passive:true});
+    fab.addEventListener('pointerup',e=>{if(pointerId!==e.pointerId)return;pointerId=null;cancelHold();if(!held)openTransactionSheet(null,'expense')});
+    fab.addEventListener('pointercancel',()=>{pointerId=null;cancelHold()});
   }
   $('#sheetBackdrop').onclick=closeSheet;
   $('#privacyToggle').onclick=async()=>{state.settings.privacy=!state.settings.privacy;$('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye');await persist();render()};

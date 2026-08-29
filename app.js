@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '5.0.0';
+const APP_VERSION = '5.1.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -109,6 +109,7 @@ let planForecastRange = 12;
 let planScenario = { extraIncome:0, extraExpense:0, oneTimeExpense:0, oneTimeMonth:3 };
 let toastTimer = null;
 const chartRegistry = new Map();
+let chartEntranceObserver = null;
 const UI_STORAGE_KEY = 'money-ui-v4';
 let uiMemory = { scroll:{}, planExplain:false };
 let forecastRefreshTimer = null;
@@ -1108,9 +1109,54 @@ async function deleteTransactionWithUndo(tx){
   await persist();render();
   showToast('Операция удалена','Отменить',async()=>{state.transactions.push(removed);await persist();render();showToast('Удаление отменено')});
 }
+
+function animateChartsOnView(root=$('#main')){
+  if(chartEntranceObserver){
+    try{chartEntranceObserver.disconnect()}catch(_){}
+    chartEntranceObserver=null;
+  }
+  if(!root || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const lineCharts=$$('.chart-shell',root);
+  const barCharts=$$('.chart',root).filter(el=>el.querySelector(':scope > svg .bar-income, :scope > svg .bar-expense'));
+
+  lineCharts.forEach(el=>el.classList.add('chart-await-rise'));
+  barCharts.forEach(el=>el.classList.add('chart-bars-await'));
+
+  const start=el=>{
+    if(el.classList.contains('chart-await-rise')){
+      el.classList.remove('chart-await-rise');
+      el.classList.add('chart-rise');
+    }
+    if(el.classList.contains('chart-bars-await')){
+      el.classList.remove('chart-bars-await');
+      el.classList.add('chart-bars-rise');
+    }
+  };
+
+  if(!('IntersectionObserver' in window)){
+    requestAnimationFrame(()=>[...lineCharts,...barCharts].forEach(start));
+    return;
+  }
+
+  chartEntranceObserver=new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{
+      if(!entry.isIntersecting) return;
+      start(entry.target);
+      chartEntranceObserver?.unobserve(entry.target);
+    });
+  },{
+    threshold:.16,
+    rootMargin:'0px 0px -6% 0px'
+  });
+
+  [...lineCharts,...barCharts].forEach(el=>chartEntranceObserver.observe(el));
+}
+
 function enhanceRenderedUI(){
   installPressFeedback($('#main'));
   animateNumberElements($('#main'));
+  animateChartsOnView($('#main'));
   if(activeTab==='transactions') bindSwipeRows();
 }
 
@@ -1613,6 +1659,84 @@ function openMonthCloseSheet(){
   openSheet(`<div class="sheet-head"><h3>Итоги месяца</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="month-close"><div class="month-close-title">${esc(title)}</div><div class="month-close-grid"><div><small>Доходы</small><strong class="positive">${fmtMajor(m.income)}</strong></div><div><small>Расходы</small><strong>${fmtMajor(m.expense)}</strong></div><div><small>Результат</small><strong class="${m.net>=0?'positive':'negative'}">${fmtMajor(m.net,true)}</strong></div><div><small>Норма накопления</small><strong>${Math.round(sr)}%</strong></div></div>${cats[0]?`<p>Больше всего расходов: <b>${esc(cats[0].icon)} ${esc(cats[0].name)} · ${fmtMajor(cats[0].value)}</b>.</p>`:''}${cmp.expenseDelta!==null?`<p>Расходы ${cmp.expenseDelta>0?'выше':'ниже'} прошлого месяца на <b>${Math.abs(Math.round(cmp.expenseDelta))}%</b>.</p>`:''}</div><button class="primary-btn sheet-close">Готово</button>`);
 }
 
+
+async function forceAppUpdate(button=null){
+  if(button){
+    button.disabled=true;
+    button.classList.add('checking');
+    const label=button.querySelector('[data-update-label]');
+    if(label) label.textContent='Проверяю…';
+  }
+
+  const restore=(text='Проверить и обновить')=>{
+    if(!button)return;
+    button.disabled=false;
+    button.classList.remove('checking');
+    const label=button.querySelector('[data-update-label]');
+    if(label) label.textContent=text;
+  };
+
+  try{
+    if(!navigator.onLine){
+      restore('Нет подключения');
+      showToast('Для проверки обновления нужен интернет');
+      return;
+    }
+
+    // version.json is deliberately requested outside the app-shell cache.
+    const res=await fetch(`./version.json?t=${Date.now()}`,{
+      cache:'no-store',
+      headers:{'Cache-Control':'no-cache'}
+    });
+    if(!res.ok) throw new Error('version check failed');
+    const remote=await res.json();
+    const latest=String(remote.version||'').trim();
+
+    if(!latest) throw new Error('invalid version');
+
+    if(latest===APP_VERSION){
+      const reg=await navigator.serviceWorker?.getRegistration();
+      if(reg) await reg.update().catch(()=>{});
+      restore('Уже актуально');
+      showToast(`Установлена последняя версия V${APP_VERSION}`);
+      setTimeout(()=>restore(),1700);
+      return;
+    }
+
+    if(button){
+      const label=button.querySelector('[data-update-label]');
+      if(label) label.textContent=`Обновляю до V${latest}…`;
+    }
+
+    // For an explicit user-requested update we prefer freshness over keeping
+    // an old app-shell cache. IndexedDB financial data is NOT touched.
+    const reg=await navigator.serviceWorker?.getRegistration();
+    if(reg){
+      try{await reg.update()}catch(_){}
+      try{await reg.unregister()}catch(_){}
+    }
+
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(
+        keys
+          .filter(key=>key.startsWith('money-pwa-'))
+          .map(key=>caches.delete(key))
+      );
+    }
+
+    // Bust Safari's document cache as well. The next page registers the new SW.
+    const url=new URL('./',location.href);
+    url.searchParams.set('update',latest);
+    url.searchParams.set('_',Date.now().toString());
+    location.replace(url.href);
+  }catch(err){
+    console.error('Update check failed',err);
+    restore('Повторить проверку');
+    showToast('Не удалось проверить обновление');
+  }
+}
+
 function renderMore(){
   const protectedCount=state.accounts.filter(a=>a.protected).length;
   const backupText=state.settings.lastBackupAt?new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(state.settings.lastBackupAt)):'ещё не создавалась';
@@ -1621,12 +1745,18 @@ function renderMore(){
   const att=attentionItems();
   $('#main').innerHTML=`
     <section class="app-version-card">
-      <div class="app-version-icon">${uiIcon('sparkles')}</div>
-      <div>
-        <small>Money App</small>
-        <strong>V${APP_VERSION}</strong>
-        <span>Текущая установленная версия</span>
+      <div class="app-version-main">
+        <div class="app-version-icon">${uiIcon('sparkles')}</div>
+        <div>
+          <small>Money App</small>
+          <strong>V${APP_VERSION}</strong>
+          <span>Текущая установленная версия</span>
+        </div>
       </div>
+      <button class="app-update-btn" type="button" data-action="force-update">
+        ${uiIcon('download')}
+        <span data-update-label>Проверить и обновить</span>
+      </button>
     </section>
     <section class="section first-section"><div class="section-head"><h2>Основные</h2></div>${rows([
       row('wallet','Счета и кошельки',`${state.accounts.length} счетов · ${protectedCount} защищённых`,'manage-accounts'),
@@ -1711,6 +1841,7 @@ function bindCommonActions(){
   const imj=$('[data-action="import-json"]'); if(imj)imj.onclick=()=>$('#importInput').click();
   const exc=$('[data-action="export-csv"]'); if(exc)exc.onclick=exportCSV;
   const clear=$('[data-action="clear-data"]'); if(clear)clear.onclick=clearAllData;
+  const forceUpdate=$('[data-action="force-update"]'); if(forceUpdate)forceUpdate.onclick=()=>forceAppUpdate(forceUpdate);
 }
 
 function openSheet(html){
@@ -2012,7 +2143,33 @@ async function init(){
   planForecastRange=Math.min(18,Math.max(3,planForecastRange));applyUISettings();
   const now=new Date(); $('#todayLabel').textContent=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(now);
   $('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye'); bindShell(); document.body.classList.add('app-loading'); render(); requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('app-loading')));
-  if('serviceWorker' in navigator){window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('./service-worker.js');await reg.update();if(reg.waiting)showToast('Доступна новая версия','Обновить',()=>{reg.waiting.postMessage({type:'SKIP_WAITING'});location.reload()});reg.addEventListener('updatefound',()=>{const w=reg.installing;if(w)w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showToast('Доступна новая версия','Обновить',()=>location.reload())})})}catch(_){}});}
+  if('serviceWorker' in navigator){
+    window.addEventListener('load',async()=>{
+      try{
+        const reg=await navigator.serviceWorker.register('./service-worker.js?v=5.1.0',{updateViaCache:'none'});
+        await reg.update();
+        if(reg.waiting){
+          showToast('Доступна новая версия','Обновить',()=>{
+            reg.waiting?.postMessage({type:'SKIP_WAITING'});
+          });
+        }
+        navigator.serviceWorker.addEventListener('controllerchange',()=>{
+          if(!sessionStorage.getItem('sw-reloaded')){
+            sessionStorage.setItem('sw-reloaded','1');
+            location.reload();
+          }
+        });
+        reg.addEventListener('updatefound',()=>{
+          const w=reg.installing;
+          if(w)w.addEventListener('statechange',()=>{
+            if(w.state==='installed'&&navigator.serviceWorker.controller){
+              showToast('Доступна новая версия','Обновить',()=>w.postMessage({type:'SKIP_WAITING'}));
+            }
+          });
+        });
+      }catch(_){}
+    });
+  }
 }
 
 init();

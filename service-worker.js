@@ -1,9 +1,9 @@
-const CACHE = 'money-pwa-v5.0.0';
+const CACHE = 'money-pwa-v5.1.0';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=5.0.0',
-  './app.js?v=5.0.0',
+  './style.css?v=5.1.0',
+  './app.js?v=5.1.0',
   './manifest.json',
   './icons/icon-180.png',
   './icons/icon-192.png',
@@ -29,9 +29,13 @@ self.addEventListener('fetch', event => {
 
   event.respondWith((async () => {
     try {
-      const fresh = await fetch(event.request);
+      const isShell =
+        event.request.mode === 'navigate' ||
+        /\/(?:index\.html|app\.js|style\.css|manifest\.json|version\.json)$/.test(url.pathname);
+      const request = isShell ? new Request(event.request, {cache:'no-store'}) : event.request;
+      const fresh = await fetch(request);
       const cache = await caches.open(CACHE);
-      cache.put(event.request, fresh.clone());
+      if(url.pathname.endsWith('/version.json') === false) cache.put(event.request, fresh.clone());
       return fresh;
     } catch (error) {
       const cached = await caches.match(event.request);
@@ -43,5 +47,13 @@ self.addEventListener('fetch', event => {
 });
 
 self.addEventListener('message', event => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data.type === 'PURGE_APP_CACHE') {
+    event.waitUntil(
+      caches.keys().then(keys =>
+        Promise.all(keys.filter(k => k.startsWith('money-pwa-')).map(k => caches.delete(k)))
+      )
+    );
+  }
 });

@@ -2864,3 +2864,163 @@ body > .bottom-nav .nav-item.active{
   border-right:0!important;
   border-radius:0!important;
 }
+
+
+/* =========================================================
+   V5.1 — Living charts + explicit updater
+   ========================================================= */
+
+/* A line chart first sits flat at the chart baseline and rises into place.
+   Grid/labels stay still, so the scale is readable throughout the motion. */
+.chart-shell.chart-await-rise .chart-line,
+.chart-shell.chart-rise .chart-line{
+  stroke-dasharray:none!important;
+  stroke-dashoffset:0!important;
+  transform-box:view-box;
+  transform-origin:center bottom;
+}
+
+.chart-shell.chart-await-rise .chart-line{
+  transform:scaleY(.018);
+  opacity:.18;
+}
+
+.chart-shell.chart-rise .chart-line{
+  animation:chartRiseFromZero var(--motion-slow) cubic-bezier(.16,.86,.22,1) both!important;
+}
+
+.chart-shell.chart-await-rise .chart-area{
+  transform-box:view-box;
+  transform-origin:center bottom;
+  transform:scaleY(.012);
+  opacity:0!important;
+  animation:none!important;
+}
+
+.chart-shell.chart-rise .chart-area{
+  transform-box:view-box;
+  transform-origin:center bottom;
+  animation:chartAreaRiseFromZero var(--motion-slow) cubic-bezier(.16,.86,.22,1) both!important;
+}
+
+.chart-shell.chart-await-rise .chart-dot,
+.chart-shell.chart-await-rise .chart-event-dot{
+  opacity:0!important;
+  animation:none!important;
+}
+
+.chart-shell.chart-rise .chart-dot,
+.chart-shell.chart-rise .chart-event-dot{
+  animation:chartDotArrive var(--motion-fast) calc(var(--motion-slow) * .68) cubic-bezier(.18,.82,.22,1) both!important;
+}
+
+@keyframes chartRiseFromZero{
+  0%{transform:scaleY(.018);opacity:.16}
+  62%{opacity:1}
+  100%{transform:scaleY(1);opacity:1}
+}
+
+@keyframes chartAreaRiseFromZero{
+  0%{transform:scaleY(.012);opacity:0}
+  30%{opacity:.12}
+  100%{transform:scaleY(1);opacity:.48}
+}
+
+@keyframes chartDotArrive{
+  from{opacity:0;transform:scale(.55)}
+  to{opacity:.72;transform:scale(1)}
+}
+
+/* Cash-flow bars grow vertically from zero as they enter the viewport. */
+.chart.chart-bars-await .bar-income,
+.chart.chart-bars-await .bar-expense{
+  transform-box:fill-box;
+  transform-origin:center bottom;
+  transform:scaleY(.015);
+  opacity:.22;
+}
+
+.chart.chart-bars-rise .bar-income,
+.chart.chart-bars-rise .bar-expense{
+  transform-box:fill-box;
+  transform-origin:center bottom;
+  animation:barRiseFromZero var(--motion-slow) cubic-bezier(.16,.86,.22,1) both;
+}
+
+.chart.chart-bars-rise .bar-expense{
+  animation-delay:45ms;
+}
+
+@keyframes barRiseFromZero{
+  from{transform:scaleY(.015);opacity:.22}
+  to{transform:scaleY(1);opacity:1}
+}
+
+/* Version card is now also the update control. */
+.app-version-card{
+  display:grid!important;
+  grid-template-columns:1fr!important;
+  gap:11px!important;
+}
+
+.app-version-main{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width:0;
+}
+
+.app-update-btn{
+  width:100%;
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+
+  border:1px solid rgba(155,184,245,.11);
+  border-radius:14px;
+  background:rgba(126,167,255,.055);
+  color:#b8cdf8;
+
+  font:inherit;
+  font-size:10px;
+  font-weight:650;
+
+  transition:
+    transform var(--motion-fast) cubic-bezier(.2,.8,.2,1),
+    background-color var(--motion-fast) ease,
+    opacity var(--motion-fast) ease;
+}
+
+.app-update-btn .ui-icon{
+  width:16px;
+  height:16px;
+}
+
+.app-update-btn:active{
+  transform:scale(.975);
+  background:rgba(126,167,255,.085);
+}
+
+.app-update-btn:disabled{
+  opacity:.68;
+}
+
+.app-update-btn.checking .ui-icon{
+  animation:updateSpin 900ms linear infinite;
+}
+
+@keyframes updateSpin{
+  to{transform:rotate(360deg)}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .chart-shell.chart-await-rise .chart-line,
+  .chart-shell.chart-await-rise .chart-area,
+  .chart.chart-bars-await .bar-income,
+  .chart.chart-bars-await .bar-expense{
+    transform:none!important;
+    opacity:1!important;
+  }
+}

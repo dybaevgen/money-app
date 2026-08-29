@@ -375,19 +375,26 @@ function svgLine(data,{interactive=false,height='normal'}={}){
   chartRegistry.set(id,data);
   const w=680,h=230,pl=56,pr=18,pt=16,pb=34;
   const vals=data.map(d=>Number(d.value)||0);
-  let min=Math.min(...vals),max=Math.max(...vals);
-  const pad=(max-min||Math.max(1,Math.abs(max)*.2||1))*.14;
-  min-=pad; max+=pad;
-  if(min>0) min=Math.max(0,min);
-  if(max<0) max=Math.min(0,max);
-  if(max===min){max+=1;min-=1}
+  let rawMin=Math.min(...vals), rawMax=Math.max(...vals);
+  const rawRange=Math.max(1, rawMax-rawMin);
+  let min=rawMin-rawRange*0.12, max=rawMax+rawRange*0.12;
+  if(rawMin>=0) min=0;
+  if(rawMax<=0) max=0;
+  const approxStep=Math.max(1,(max-min)/2);
+  const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
+  const norm=approxStep/mag;
+  const niceNorm=norm<=1?1:norm<=2?2:norm<=5?5:10;
+  const step=niceNorm*mag;
+  min=Math.floor(min/step)*step;
+  max=Math.ceil(max/step)*step;
+  if(max===min){max+=step;min-=step}
   const range=max-min;
   const xFor=i=>pl+(i*(w-pl-pr)/(Math.max(1,data.length-1)));
   const yFor=v=>pt+(max-v)/range*(h-pt-pb);
   const pts=data.map((d,i)=>({x:xFor(i),y:yFor(Number(d.value)||0),...d}));
   const path=pts.map((q,i)=>`${i?'L':'M'} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join(' ');
   const area=`${path} L ${pts.at(-1).x.toFixed(1)} ${h-pb} L ${pts[0].x.toFixed(1)} ${h-pb} Z`;
-  const yTicks=[0,.5,1].map(r=>max-r*range);
+  const yTicks=[max,max-step,max-2*step].filter((v,i,a)=>i===a.findIndex(x=>x===v));
   const grid=yTicks.map(v=>`<g><line class="chart-grid" x1="${pl}" y1="${yFor(v)}" x2="${w-pr}" y2="${yFor(v)}"/><text class="chart-y-label" x="${pl-8}" y="${yFor(v)+3}" text-anchor="end">${esc(compactMoney(v))}</text></g>`).join('');
   const stride=Math.max(1,Math.ceil((data.length-1)/5));
   const labels=pts.map((q,i)=>((i===0||i===pts.length-1||i%stride===0)&&q.label)?`<text class="chart-label" x="${q.x}" y="${h-8}" text-anchor="middle">${esc(q.label)}</text>`:'').join('');
@@ -412,7 +419,16 @@ function compactMoney(value){
 }
 
 function bindInteractiveCharts(){
-  $$('.interactive-chart').forEach(el=>{
+  const charts=$$('.interactive-chart');
+  const hideAll=()=>{
+    charts.forEach(el=>{
+      const cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
+      if(cursor)cursor.classList.add('hidden');
+      if(dot)dot.classList.add('hidden');
+      if(tip)tip.classList.add('hidden');
+    });
+  };
+  charts.forEach(el=>{
     const data=chartRegistry.get(el.dataset.chartId); if(!data?.length)return;
     const svg=$('svg',el), cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
     let activePointer=null;
@@ -427,7 +443,20 @@ function bindInteractiveCharts(){
       const idx=Math.max(0,Math.min(data.length-1,Math.round(ratio*(data.length-1))));
       const d=data[idx];
       const x=pl+(idx*(vb.width-pl-pr)/(Math.max(1,data.length-1)));
-      const values=data.map(x=>Number(x.value)||0); let min=Math.min(...values),max=Math.max(...values); const pad=(max-min||Math.max(1,Math.abs(max)*.2||1))*.14; min-=pad;max+=pad;if(min>0)min=Math.max(0,min);if(max<0)max=Math.min(0,max);if(max===min){max+=1;min-=1}
+      const values=data.map(x=>Number(x.value)||0);
+      let rawMin=Math.min(...values), rawMax=Math.max(...values);
+      const rawRange=Math.max(1, rawMax-rawMin);
+      let min=rawMin-rawRange*0.12, max=rawMax+rawRange*0.12;
+      if(rawMin>=0) min=0;
+      if(rawMax<=0) max=0;
+      const approxStep=Math.max(1,(max-min)/2);
+      const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
+      const norm=approxStep/mag;
+      const niceNorm=norm<=1?1:norm<=2?2:norm<=5?5:10;
+      const step=niceNorm*mag;
+      min=Math.floor(min/step)*step;
+      max=Math.ceil(max/step)*step;
+      if(max===min){max+=step;min-=step}
       const y=pt+(max-(Number(d.value)||0))/(max-min)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
@@ -435,6 +464,7 @@ function bindInteractiveCharts(){
       const pct=x/vb.width*100; tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
     el.addEventListener('pointerdown',e=>{
+      hideAll();
       activePointer=e.pointerId;
       try{el.setPointerCapture(e.pointerId)}catch(_){}
       e.preventDefault();
@@ -455,8 +485,11 @@ function bindInteractiveCharts(){
     };
     el.addEventListener('pointerup',finish);
     el.addEventListener('pointercancel',finish);
+    el.addEventListener('lostpointercapture',()=>{ activePointer=null; hide(); });
     el.addEventListener('pointerleave',e=>{ if(e.pointerType==='mouse' && activePointer===null) hide(); });
   });
+  document.addEventListener('pointerup', hideAll, {passive:true, once:true});
+  document.addEventListener('touchend', hideAll, {passive:true, once:true});
 }
 
 function svgBars(data){
@@ -587,6 +620,7 @@ function planRow(p,date=null){
 function toISODate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 function planForecastHTML(){
+  planForecastRange=Math.min(18,Math.max(3,planForecastRange));
   planScenario.oneTimeMonth=Math.min(planForecastRange,Math.max(1,Number(planScenario.oneTimeMonth)||1));
   const forecast=forecastSeries(planForecastRange,planScenario);
   const final=forecast.series.at(-1).value;
@@ -622,8 +656,8 @@ function renderPlan(){
   $('#main').innerHTML=`
     <section class="card forecast-card">
       <div class="section-head"><h2>Прогноз капитала</h2><span class="badge" id="forecastRangeLabel">${planForecastRange} мес.</span></div>
-      <div class="forecast-range-tabs">${[3,6,12,24,36].map(n=>`<button data-forecast-range="${n}" class="${planForecastRange===n?'active':''}">${n}м</button>`).join('')}</div>
-      <div class="range-control"><span>3 мес.</span><input id="forecastRangeSlider" type="range" min="3" max="36" step="1" value="${planForecastRange}"><span>36 мес.</span></div>
+      <div class="forecast-range-tabs">${[3,6,12,18].map(n=>`<button data-forecast-range="${n}" class="${planForecastRange===n?'active':''}">${n}м</button>`).join('')}</div>
+      <div class="range-control"><span>3 мес.</span><input id="forecastRangeSlider" type="range" min="3" max="18" step="1" value="${planForecastRange}"><span>18 мес.</span></div>
       <div id="forecastDynamic">${planForecastHTML()}</div>
       <div class="forecast-method"><span>Доходы: <b>${hasRecurringPlan('income')?'по плану':'средний факт'}</b></span><span>Расходы: <b>${hasRecurringPlan('expense')?'по плану':'средний факт'}</b></span></div>
     </section>
@@ -668,12 +702,12 @@ function renderPlan(){
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
   $$('[data-budget]').forEach(b=>b.onclick=()=>openBudgetSheet(state.budgets.find(x=>x.id===b.dataset.budget)));
   $$('[data-goal]').forEach(b=>b.onclick=()=>openGoalSheet(state.goals.find(x=>x.id===b.dataset.goal)));
-  $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Number(b.dataset.forecastRange);renderPlan()});
-  const slider=$('#forecastRangeSlider'); if(slider)slider.oninput=e=>{planForecastRange=Number(e.target.value);refreshPlanForecast()};
+  $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Math.min(18,Number(b.dataset.forecastRange));renderPlan()});
+  const slider=$('#forecastRangeSlider'); if(slider)slider.oninput=e=>{planForecastRange=Math.min(18,Number(e.target.value));refreshPlanForecast()};
   const simIncome=$('#simIncome'); if(simIncome)simIncome.oninput=e=>{planScenario.extraIncome=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simExpense=$('#simExpense'); if(simExpense)simExpense.oninput=e=>{planScenario.extraExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simOnce=$('#simOnce'); if(simOnce)simOnce.oninput=e=>{planScenario.oneTimeExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
-  const simMonth=$('#simOnceMonth'); if(simMonth)simMonth.oninput=e=>{planScenario.oneTimeMonth=Number(e.target.value);refreshPlanForecast()};
+  const simMonth=$('#simOnceMonth'); if(simMonth)simMonth.oninput=e=>{planScenario.oneTimeMonth=Math.min(planForecastRange,Number(e.target.value));refreshPlanForecast()};
   const reset=$('#resetScenario'); if(reset)reset.onclick=()=>{planScenario={extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:Math.min(3,planForecastRange)};renderPlan()};
 }
 
@@ -915,6 +949,7 @@ function bindShell(){
 
 async function init(){
   const saved=await dbGet().catch(()=>null); state=normalizeState(saved||defaultState()); if(!saved)await persist();
+  planForecastRange=Math.min(18,Math.max(3,planForecastRange));
   const now=new Date(); $('#todayLabel').textContent=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(now);
   $('#privacyIcon').textContent=state.settings.privacy?'◌':'◉'; bindShell(); render();
   if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js').catch(()=>{}));}

@@ -899,37 +899,7 @@ html[data-accent="violet"]{--accent:#a98cff;--accent-rgb:169,140,255}
 html[data-accent="green"]{--accent:#62d2aa;--accent-rgb:98,210,170}
 html[data-accent="graphite"]{--accent:#aeb7c6;--accent-rgb:174,183,198}
 
-/* Same-document View Transitions give the tab switch a real old/new surface. */
-#main{view-transition-name:app-main}
-#pageTitle{view-transition-name:page-title}
-::view-transition-group(app-main),::view-transition-group(page-title){animation-duration:var(--tab-duration);animation-timing-function:var(--ease-natural)}
-::view-transition-old(app-main),::view-transition-new(app-main){mix-blend-mode:normal;animation-duration:var(--tab-duration);animation-timing-function:var(--ease-natural)}
-html[data-nav-direction="forward"]::view-transition-old(app-main){animation-name:v4-old-forward}
-html[data-nav-direction="forward"]::view-transition-new(app-main){animation-name:v4-new-forward}
-html[data-nav-direction="back"]::view-transition-old(app-main){animation-name:v4-old-back}
-html[data-nav-direction="back"]::view-transition-new(app-main){animation-name:v4-new-back}
-::view-transition-old(page-title){animation-name:v4-title-old}
-::view-transition-new(page-title){animation-name:v4-title-new}
-@keyframes v4-old-forward{to{opacity:0;transform:translate3d(-10px,0,0) scale(.997)}}
-@keyframes v4-new-forward{from{opacity:0;transform:translate3d(12px,0,0) scale(.997)}to{opacity:1;transform:none}}
-@keyframes v4-old-back{to{opacity:0;transform:translate3d(10px,0,0) scale(.997)}}
-@keyframes v4-new-back{from{opacity:0;transform:translate3d(-12px,0,0) scale(.997)}to{opacity:1;transform:none}}
-@keyframes v4-title-old{to{opacity:0;transform:translateY(-3px)}}
-@keyframes v4-title-new{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-html[data-motion="minimal"] ::view-transition-group(app-main),html[data-motion="minimal"] ::view-transition-group(page-title){animation-duration:1ms!important}
-
-/* Performance: off-screen sections don't need full paint work. */
-.section{content-visibility:auto;contain-intrinsic-size:auto 180px}
-.chart-surface,.forecast-panel{transform:translateZ(0)}
-.main{will-change:auto!important;contain:layout style}
-.bottom-nav{will-change:auto!important}
-.sheet{transition:transform var(--sheet-duration) var(--ease-spring)!important}
-.nav-glider{transition:transform var(--motion-slow) var(--ease-spring),background var(--motion-base) ease!important}
-.plan-advice-details{transition:grid-template-rows var(--motion-slow) var(--ease-spring),opacity var(--motion-base) ease!important}
-.plan-explain-toggle span{transition:transform var(--motion-slow) var(--ease-spring),opacity var(--motion-fast) ease!important}
-.chart-line{animation-duration:var(--motion-slow)!important}
-.chart-area{animation-duration:var(--motion-base)!important;animation-delay:var(--motion-instant)!important}
-.chart-event-dot,.chart-dot{animation-duration:var(--motion-base)!important;animation-delay:var(--motion-fast)!important}
+/* V4.3: experimental document View Transitions and paint-containment removed for Safari stability. */
 
 /* Compact mode only tightens rhythm; it doesn't change information hierarchy. */
 html[data-density="compact"] .main{padding-left:14px;padding-right:14px}
@@ -1289,109 +1259,133 @@ html{--accent-soft:rgba(var(--accent-rgb),.14)}
 }
 
 
+
+
 /* =========================================================
-   V4.2 HOTFIX — MAIN NAVIGATION IS ALWAYS A BOTTOM TAB BAR
-   Never convert this navigation into a sidebar.
+   V4.3 STABILITY — iPhone-first rendering
    ========================================================= */
-html, body {
-  overflow-x: hidden !important;
+
+/* No content-visibility / containment shortcuts: Safari renders the full view. */
+.section,
+.main,
+.chart-surface,
+.forecast-panel{
+  content-visibility:visible!important;
+  contain:none!important;
 }
 
-#app {
-  padding-left: 0 !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
+/* The tab bar is a permanent viewport layer and never belongs to page motion. */
+.bottom-nav{
+  position:fixed!important;
+  z-index:1000!important;
+  left:50%!important;
+  right:auto!important;
+  top:auto!important;
+  bottom:max(3px,env(safe-area-inset-bottom))!important;
+
+  width:min(calc(100vw - 10px),752px)!important;
+  max-width:calc(100vw - 10px)!important;
+  height:72px!important;
+  min-height:72px!important;
+
+  display:grid!important;
+  grid-template-columns:repeat(6,minmax(0,1fr))!important;
+  align-items:stretch!important;
+
+  padding:5px!important;
+  margin:0!important;
+  transform:translate3d(-50%,0,0)!important;
+
+  opacity:1!important;
+  visibility:visible!important;
+  will-change:auto!important;
+  contain:none!important;
+  isolation:isolate;
 }
 
-.bottom-nav.bottom-dock,
-.bottom-nav {
-  position: fixed !important;
-  z-index: 999 !important;
-
-  top: auto !important;
-  right: auto !important;
-  left: 50% !important;
-
-  bottom: max(4px, env(safe-area-inset-bottom)) !important;
-
-  display: grid !important;
-  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
-  grid-template-rows: 1fr !important;
-  align-items: stretch !important;
-
-  width: min(calc(100vw - 12px), 748px) !important;
-  max-width: calc(100vw - 12px) !important;
-  height: 72px !important;
-  min-height: 72px !important;
-  max-height: 72px !important;
-
-  margin: 0 !important;
-  padding: 5px 6px !important;
-
-  transform: translate3d(-50%, 0, 0) !important;
-  transform-origin: center bottom !important;
-
-  border-radius: 25px !important;
-  overflow: hidden !important;
-
-  flex-direction: row !important;
-  writing-mode: horizontal-tb !important;
+/* Never fade the tab bar during app/page transitions. */
+body.app-loading .bottom-nav{
+  opacity:1!important;
+}
+.bottom-nav{
+  transition:none!important;
 }
 
-.bottom-nav .nav-item,
-.bottom-nav .nav-add {
-  position: relative !important;
-  inset: auto !important;
-  width: auto !important;
-  min-width: 0 !important;
-  margin: 0 !important;
+/* Central + keeps its own geometry; it is NOT stretched like a tab item. */
+.bottom-nav .nav-add,
+#fab{
+  position:relative!important;
+  z-index:3!important;
+  place-self:center!important;
+  width:48px!important;
+  min-width:48px!important;
+  max-width:48px!important;
+  height:48px!important;
+  min-height:48px!important;
+  max-height:48px!important;
+  padding:0!important;
+  margin:0!important;
+  border-radius:17px!important;
+  display:grid!important;
+  place-items:center!important;
+  flex:none!important;
+  transform:none;
+}
+.bottom-nav .nav-add span,
+#fab span{
+  display:block!important;
+  font-size:29px!important;
+  line-height:1!important;
+  transform:translateY(-1px)!important;
 }
 
-.bottom-nav .nav-item {
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: center !important;
-  align-items: center !important;
+/* Press effect only; no layout-changing animation. */
+.bottom-nav .nav-add.is-pressed,
+.bottom-nav .nav-add:active{
+  transform:scale(.92)!important;
 }
 
-.bottom-nav .nav-glider {
-  position: absolute !important;
-  top: 5px !important;
-  bottom: 5px !important;
-  left: var(--nav-pad, 6px) !important;
-  width: calc((100% - (var(--nav-pad, 6px) * 2)) / 6) !important;
+/* Regular navigation items remain six equal slots around the +. */
+.bottom-nav .nav-item{
+  position:relative!important;
+  z-index:2!important;
+  min-width:0!important;
+  width:auto!important;
+  height:auto!important;
+  margin:0!important;
+  padding:0 2px!important;
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
 }
 
-@media (min-width: 1px) {
-  .bottom-nav.bottom-dock,
-  .bottom-nav {
-    left: 50% !important;
-    right: auto !important;
-    top: auto !important;
-    bottom: max(4px, env(safe-area-inset-bottom)) !important;
-    width: min(calc(100vw - 12px), 748px) !important;
-    height: 72px !important;
-    display: grid !important;
-    grid-template-columns: repeat(6, minmax(0,1fr)) !important;
-    grid-auto-flow: column !important;
+/* Glider only moves under tabs; it never affects bar visibility. */
+.bottom-nav .nav-glider{
+  position:absolute!important;
+  z-index:1!important;
+  top:5px!important;
+  bottom:5px!important;
+  left:5px!important;
+  width:calc((100% - 10px)/6)!important;
+  transform:translate3d(calc(var(--nav-index) * 100%),0,0)!important;
+  transition:transform var(--motion-slow) cubic-bezier(.18,.8,.22,1)!important;
+}
+
+/* Main page may animate, but nav/top-level overlays do not. */
+#main{
+  backface-visibility:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* Enough room so the last content never hides behind the permanent tab bar. */
+#app{
+  padding-bottom:calc(94px + env(safe-area-inset-bottom))!important;
+}
+
+@media (orientation:landscape){
+  .bottom-nav{
+    bottom:max(3px,env(safe-area-inset-bottom))!important;
+    width:min(calc(100vw - 18px),752px)!important;
   }
-}
-
-@media (orientation: landscape) {
-  .bottom-nav.bottom-dock,
-  .bottom-nav {
-    left: 50% !important;
-    right: auto !important;
-    top: auto !important;
-    bottom: max(4px, env(safe-area-inset-bottom)) !important;
-    width: min(calc(100vw - 18px), 748px) !important;
-    height: 68px !important;
-    min-height: 68px !important;
-    max-height: 68px !important;
-  }
-}
-
-/* leave enough content space for the fixed bottom tab bar */
-#app {
-  padding-bottom: calc(92px + env(safe-area-inset-bottom)) !important;
 }

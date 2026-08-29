@@ -5,12 +5,12 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.2.0';
+const APP_VERSION = '4.3.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
 let displaySnapshot = new Map();
-let forceNumberRise = true;
+let numberObserver = null;
 
 const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
@@ -893,104 +893,161 @@ function donutHTML(items){
 
 
 function parseMoneyText(text=''){
-  if(!text || text.includes('•')) return null;
+  if(!text || text.includes('•') || !text.includes('€')) return null;
   const sign=text.includes('−')?-1:1;
-  const cleaned=text.replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',','.');
+  const cleaned=text
+    .replace(/\s/g,'')
+    .replace(/[^\d,.\-]/g,'')
+    .replace(/\.(?=\d{3}(?:\D|$))/g,'')
+    .replace(',','.');
   const n=Number(cleaned);
   return Number.isFinite(n)?sign*Math.abs(n):null;
 }
-function animateNumberElements(root=$('#main')){
-  if(!root || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const nodes=$$('.capital-value,.month-outlook-main strong,.item-amount,.kpi strong,.stats-hero strong,.month-summary-line strong',root);
-  nodes.forEach((el,i)=>{
-    const target=parseMoneyText(el.textContent);
-    if(target===null) return;
-    const key=`${activeTab}:${i}:${el.className}`;
-    const stored=displaySnapshot.get(key);
-    const prev=forceNumberRise?0:stored;
-    displaySnapshot.set(key,target);
-    if(prev===undefined || Math.abs(target-prev)<0.005) return;
-    const start=performance.now(), dur=motionMs(420);
-    const decimals=/,\d{2}/.test(el.textContent)?2:0;
-    const signed=/^[+−]/.test(el.textContent.trim());
-    const frame=now=>{
-      const t=Math.min(1,(now-start)/dur);
-      const ease=1-Math.pow(1-t,3);
-      const v=prev+(target-prev)*ease;
-      const abs=new Intl.NumberFormat('de-DE',{minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(Math.abs(v));
-      const sign=signed?(v>0?'+':v<0?'−':''):(v<0?'−':'');
-      el.textContent=`${sign}${abs} €`;
-      if(t<1) requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-  });
-  forceNumberRise=false;
+function formatAnimatedMoney(value, original=''){
+  const decimals=/,\d{2}/.test(original)?2:0;
+  const explicitPlus=original.trim().startsWith('+');
+  const explicitMinus=original.trim().startsWith('−') || value<0;
+  const abs=new Intl.NumberFormat('de-DE',{
+    minimumFractionDigits:decimals,
+    maximumFractionDigits:decimals
+  }).format(Math.abs(value));
+  const sign=explicitPlus && value>0 ? '+' : (explicitMinus && value<0 ? '−' : '');
+  return `${sign}${abs} €`;
 }
+function animateMoneyNode(el){
+  if(!el || el.dataset.numberAnimated==='1') return;
+  const original=el.dataset.finalMoneyText || el.textContent.trim();
+  const target=parseMoneyText(original);
+  if(target===null) return;
+
+  el.dataset.numberAnimated='1';
+  el.dataset.finalMoneyText=original;
+
+  const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduce){
+    el.textContent=original;
+    return;
+  }
+
+  const startValue=0;
+  const startTime=performance.now();
+  // Deliberately short. This is a "live value" effect, not a loading animation.
+  const duration=Math.min(520,Math.max(300,motionMs(410)));
+
+  el.textContent=formatAnimatedMoney(0,original);
+
+  const frame=now=>{
+    const t=Math.min(1,(now-startTime)/duration);
+    // Fast initial acceleration, soft landing.
+    const eased=1-Math.pow(1-t,4);
+    const value=startValue+(target-startValue)*eased;
+    el.textContent=t>=1 ? original : formatAnimatedMoney(value,original);
+    if(t<1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+function animateNumberElements(root=$('#main')){
+  if(numberObserver){
+    try{numberObserver.disconnect()}catch(_){}
+    numberObserver=null;
+  }
+  if(!root) return;
+
+  const nodes=$$('.capital-value,.month-outlook-main strong,.item-amount,.kpi strong,.stats-hero strong,.month-summary-line strong,.money-status strong,.mini-stat strong',root)
+    .filter(el=>parseMoneyText(el.textContent)!==null);
+
+  // Each render represents a newly opened view. Values animate again only when
+  // they actually enter the viewport, not while still below the fold.
+  nodes.forEach(el=>{
+    delete el.dataset.numberAnimated;
+    el.dataset.finalMoneyText=el.textContent.trim();
+  });
+
+  if(!('IntersectionObserver' in window)){
+    requestAnimationFrame(()=>nodes.forEach(animateMoneyNode));
+    return;
+  }
+
+  numberObserver=new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{
+      if(!entry.isIntersecting) return;
+      animateMoneyNode(entry.target);
+      numberObserver?.unobserve(entry.target);
+    });
+  },{
+    root:null,
+    threshold:0.12,
+    rootMargin:'0px 0px -3% 0px'
+  });
+
+  nodes.forEach(el=>numberObserver.observe(el));
+}
+
 function pulseElement(el){
   if(!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   el.animate([{transform:'scale(.97)'},{transform:'scale(1.015)'},{transform:'scale(1)'}],{duration:motionMs(260),easing:'cubic-bezier(.2,.8,.2,1)'});
 }
 function tabIndex(tab){ return ['overview','transactions','plan','stats','more'].indexOf(tab); }
+
 function animateMainSurface(mode='refresh',direction=0){
   const main=$('#main');
   if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  if(main._motion) try{main._motion.cancel()}catch(_){}
-  const frames=mode==='tab'
-    ? [{opacity:.82,transform:`translate3d(${direction*12}px,0,0) scale(.997)`},{opacity:1,transform:'translate3d(0,0,0) scale(1)'}]
-    : [{opacity:.90,transform:'translate3d(0,3px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}];
-  main._motion=main.animate(frames,{
-    duration:motionMs(mode==='tab'?260:180),
-    easing:'cubic-bezier(.22,.74,.24,1)',
-    fill:'both'
-  });
+
+  if(main._motion){
+    try{main._motion.cancel()}catch(_){}
+    main._motion=null;
+  }
+
+  const isTab=mode==='tab';
+  const distance=isTab ? Math.max(7,Math.min(12,window.innerWidth*.022)) : 4;
+  const x=isTab ? direction*distance : 0;
+
+  main._motion=main.animate(
+    [
+      {opacity:isTab?.72:.88, transform:`translate3d(${x}px,${isTab?0:3}px,0)`},
+      {opacity:1, transform:'translate3d(0,0,0)'}
+    ],
+    {
+      duration:motionMs(isTab?360:190),
+      easing:'cubic-bezier(.16,.78,.24,1)',
+      fill:'both'
+    }
+  );
+
   const motion=main._motion;
   motion.onfinish=()=>{
-    if(main._motion===motion)main._motion=null;
+    if(main._motion===motion) main._motion=null;
     try{motion.cancel()}catch(_){}
-    main.style.opacity='';main.style.transform='';
+    main.style.opacity='';
+    main.style.transform='';
   };
 }
+
 function animateLocalSurface(el){
   if(!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   if(el._motion) try{el._motion.cancel()}catch(_){}
-  el._motion=el.animate([{opacity:.72,transform:'translate3d(0,4px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],{duration:motionMs(190),easing:'cubic-bezier(.22,.74,.24,1)'});
+  el._motion=el.animate(
+    [{opacity:.78,transform:'translate3d(0,3px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],
+    {duration:motionMs(190),easing:'cubic-bezier(.18,.75,.22,1)'}
+  );
 }
-function fallbackTabTransition(update,direction){
-  const main=$('#main');
-  if(!main){update();return}
-  const rect=main.getBoundingClientRect();
-  const ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.querySelectorAll('[id]').forEach(x=>x.removeAttribute('id'));
-  ghost.className='main-transition-ghost';
-  Object.assign(ghost.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${Math.max(0,window.innerHeight-Math.max(0,rect.top))}px`,overflow:'hidden',margin:'0',pointerEvents:'none',zIndex:'30'});
-  document.body.appendChild(ghost);
-  update();
-  const fresh=$('#main');
-  const duration=motionMs(330),ease='cubic-bezier(.2,.78,.22,1)';
-  const oldAnim=ghost.animate([{opacity:1,transform:'translate3d(0,0,0)'},{opacity:0,transform:`translate3d(${-direction*12}px,0,0)`}],{duration,easing:ease,fill:'forwards'});
-  const newAnim=fresh.animate([{opacity:0,transform:`translate3d(${direction*14}px,0,0)`},{opacity:1,transform:'translate3d(0,0,0)'}],{duration,easing:ease,fill:'both'});
-  Promise.allSettled([oldAnim.finished,newAnim.finished]).finally(()=>{ghost.remove();try{newAnim.cancel()}catch(_){}});
-}
+
 function switchTab(next){
   if(!next || next===activeTab) return;
+
   rememberViewState();
   previousTab=activeTab;
-  const oldIndex=tabIndex(activeTab), newIndex=tabIndex(next);
+
+  const oldIndex=tabIndex(activeTab);
+  const newIndex=tabIndex(next);
   const direction=newIndex>=oldIndex?1:-1;
-  const update=()=>{
-    forceNumberRise=true;
-    activeTab=next;
-    window.scrollTo({top:Number(uiMemory.scroll?.[next])||0,left:0,behavior:'instant'});
-    render({motion:'none'});
-  };
-  document.documentElement.dataset.navDirection=direction>0?'forward':'back';
-  const canVT=typeof document.startViewTransition==='function' && (state.settings.animationSpeed||'smooth')!=='minimal' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if(canVT){
-    const vt=document.startViewTransition(update);
-    vt.finished.catch(()=>{}).finally(()=>{delete document.documentElement.dataset.navDirection});
-  }else{
-    fallbackTabTransition(update,direction);
-  }
+
+  // Navigation is intentionally untouched here. Only #main is replaced.
+  activeTab=next;
+  window.scrollTo(0,Number(uiMemory.scroll?.[next])||0);
+  render({motion:'tab',direction});
 }
+
 function installPressFeedback(root=document){
   $$('button,[role="button"]',root).forEach(el=>{
     if(el.dataset.pressBound) return;

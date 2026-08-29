@@ -885,3 +885,157 @@ html{scroll-behavior:auto!important}
 @media (prefers-reduced-motion:reduce){
   .main,.nav-glider,.sheet,.sheet-backdrop,.plan-advice-details,.plan-explain-toggle span{transition:none!important}
 }
+
+/* =========================================================
+   V4 — Simple by default, powerful on demand
+   ========================================================= */
+:root{
+  --accent:#7ea7ff;
+  --accent-rgb:126,167,255;
+  --ease-natural:cubic-bezier(.2,.78,.22,1);
+  --ease-soft:cubic-bezier(.25,.1,.25,1);
+}
+html[data-accent="violet"]{--accent:#a98cff;--accent-rgb:169,140,255}
+html[data-accent="green"]{--accent:#62d2aa;--accent-rgb:98,210,170}
+html[data-accent="graphite"]{--accent:#aeb7c6;--accent-rgb:174,183,198}
+
+/* Same-document View Transitions give the tab switch a real old/new surface. */
+#main{view-transition-name:app-main}
+#pageTitle{view-transition-name:page-title}
+::view-transition-group(app-main),::view-transition-group(page-title){animation-duration:var(--tab-duration);animation-timing-function:var(--ease-natural)}
+::view-transition-old(app-main),::view-transition-new(app-main){mix-blend-mode:normal;animation-duration:var(--tab-duration);animation-timing-function:var(--ease-natural)}
+html[data-nav-direction="forward"]::view-transition-old(app-main){animation-name:v4-old-forward}
+html[data-nav-direction="forward"]::view-transition-new(app-main){animation-name:v4-new-forward}
+html[data-nav-direction="back"]::view-transition-old(app-main){animation-name:v4-old-back}
+html[data-nav-direction="back"]::view-transition-new(app-main){animation-name:v4-new-back}
+::view-transition-old(page-title){animation-name:v4-title-old}
+::view-transition-new(page-title){animation-name:v4-title-new}
+@keyframes v4-old-forward{to{opacity:0;transform:translate3d(-10px,0,0) scale(.997)}}
+@keyframes v4-new-forward{from{opacity:0;transform:translate3d(12px,0,0) scale(.997)}to{opacity:1;transform:none}}
+@keyframes v4-old-back{to{opacity:0;transform:translate3d(10px,0,0) scale(.997)}}
+@keyframes v4-new-back{from{opacity:0;transform:translate3d(-12px,0,0) scale(.997)}to{opacity:1;transform:none}}
+@keyframes v4-title-old{to{opacity:0;transform:translateY(-3px)}}
+@keyframes v4-title-new{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+html[data-motion="minimal"] ::view-transition-group(app-main),html[data-motion="minimal"] ::view-transition-group(page-title){animation-duration:1ms!important}
+
+/* Performance: off-screen sections don't need full paint work. */
+.section{content-visibility:auto;contain-intrinsic-size:auto 180px}
+.chart-surface,.forecast-panel,.bottom-nav,.sheet{transform:translateZ(0)}
+.main{will-change:auto!important;contain:layout style}
+.bottom-nav{will-change:auto!important}
+.sheet{transition:transform var(--sheet-duration) var(--ease-spring)!important}
+.nav-glider{transition:transform var(--motion-slow) var(--ease-spring),background var(--motion-base) ease!important}
+.plan-advice-details{transition:grid-template-rows var(--motion-slow) var(--ease-spring),opacity var(--motion-base) ease!important}
+.plan-explain-toggle span{transition:transform var(--motion-slow) var(--ease-spring),opacity var(--motion-fast) ease!important}
+.chart-line{animation-duration:var(--motion-slow)!important}
+.chart-area{animation-duration:var(--motion-base)!important;animation-delay:var(--motion-instant)!important}
+.chart-event-dot,.chart-dot{animation-duration:var(--motion-base)!important;animation-delay:var(--motion-fast)!important}
+
+/* Compact mode only tightens rhythm; it doesn't change information hierarchy. */
+html[data-density="compact"] .main{padding-left:14px;padding-right:14px}
+html[data-density="compact"] .section{margin-top:22px}
+html[data-density="compact"] .account-item,
+html[data-density="compact"] .tx-item,
+html[data-density="compact"] .plan-item,
+html[data-density="compact"] .timeline-item,
+html[data-density="compact"] .list-button{min-height:56px;padding-top:8px;padding-bottom:8px}
+html[data-density="compact"] .capital-value{font-size:47px}
+
+/* Explanation affordances stay visually quiet. */
+.inline-info{
+  display:inline-grid;place-items:center;width:20px;height:20px;padding:0;margin:-3px 0 -3px 2px;
+  border:0;background:transparent;color:var(--subtle);vertical-align:middle;border-radius:50%;
+}
+.inline-info .ui-icon{width:13px;height:13px;stroke-width:1.7}
+.inline-info:active{background:rgba(var(--accent-rgb),.08)}
+.explain-card{padding:8px 2px 18px}
+.explain-lead{font-size:36px;font-weight:760;letter-spacing:-.05em;margin:4px 0 12px;font-variant-numeric:tabular-nums}
+.explain-card p{font-size:13px;line-height:1.58;color:var(--muted);margin:0}
+
+/* Adaptive overview / financial inbox. */
+.attention-card{
+  width:100%;margin:14px 0 2px;padding:12px 12px;border:1px solid rgba(247,199,104,.14);border-radius:18px;
+  background:rgba(247,199,104,.05);display:grid;grid-template-columns:34px minmax(0,1fr) auto 18px;gap:10px;align-items:center;text-align:left;color:inherit;
+}
+.attention-card.danger{border-color:rgba(255,126,141,.16);background:rgba(255,126,141,.055)}
+.attention-icon{width:34px;height:34px;border-radius:11px;background:rgba(247,199,104,.08);display:grid;place-items:center;color:var(--warn)}
+.attention-card.danger .attention-icon{color:var(--expense);background:rgba(255,126,141,.08)}
+.attention-icon .ui-icon{width:18px;height:18px}
+.attention-card div{min-width:0}
+.attention-card small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}
+.attention-card strong{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attention-card div>span{display:block;color:var(--subtle);font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attention-card>b{min-width:24px;height:24px;padding:0 6px;border-radius:999px;background:rgba(255,255,255,.06);display:grid;place-items:center;font-size:9px}
+.attention-card>.ui-icon{width:15px;height:15px;color:var(--subtle)}
+.daily-guide{margin:10px 1px 0;padding:10px 11px;display:grid;grid-template-columns:30px 1fr 28px;align-items:center;gap:9px;color:var(--muted)}
+.daily-guide>span{width:30px;height:30px;border-radius:10px;background:rgba(var(--accent-rgb),.075);display:grid;place-items:center;color:var(--accent)}
+.daily-guide>span .ui-icon{width:16px;height:16px}
+.daily-guide small{display:block;font-size:8px;color:var(--subtle)}
+.daily-guide strong{display:block;margin-top:3px;font-size:11px;color:#ccd3de;font-weight:620}
+.daily-guide>button{border:0;background:transparent;color:var(--subtle);padding:5px}.daily-guide>button .ui-icon{width:14px;height:14px}
+.inbox-list{display:flex;flex-direction:column;gap:8px}
+.inbox-item{width:100%;min-height:70px;padding:11px 12px;border:1px solid var(--line);border-radius:17px;background:rgba(255,255,255,.025);color:inherit;display:grid;grid-template-columns:34px 1fr 16px;gap:10px;align-items:center;text-align:left}
+.inbox-item>span{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:rgba(var(--accent-rgb),.08);color:var(--accent)}
+.inbox-item.warn>span{color:var(--warn);background:rgba(247,199,104,.08)}
+.inbox-item.danger>span{color:var(--expense);background:rgba(255,126,141,.08)}
+.inbox-item>span .ui-icon{width:17px;height:17px}.inbox-item>.ui-icon{width:14px;height:14px;color:var(--subtle)}
+.inbox-item strong{display:block;font-size:12px}.inbox-item small{display:block;color:var(--muted);font-size:9px;line-height:1.4;margin-top:4px}
+
+/* Universal detail sheets. */
+.detail-hero{text-align:center;padding:9px 0 18px;border-bottom:1px solid var(--line-soft)}
+.detail-hero>small{display:block;color:var(--muted);font-size:10px}
+.detail-hero>strong{display:block;font-size:38px;letter-spacing:-.05em;margin:7px 0 5px;font-variant-numeric:tabular-nums}
+.detail-hero>span{font-size:10px;color:var(--muted)}
+.detail-glyph{margin:0 auto 8px!important;width:42px;height:42px;border-radius:14px;background:rgba(var(--accent-rgb),.09);display:grid!important;place-items:center;color:var(--accent)}
+.detail-glyph .ui-icon{width:21px;height:21px}
+.detail-list{padding:6px 0 12px}.detail-list>div{min-height:46px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--line-soft)}
+.detail-list span{font-size:10px;color:var(--muted)}.detail-list strong{font-size:11px;text-align:right;font-weight:620}
+.detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.warn-text{color:var(--warn)!important}
+
+/* Search + sticky transaction context. */
+.tx-group{margin-top:16px}
+.tx-date-header{position:sticky;top:calc(env(safe-area-inset-top) + 67px);z-index:4;padding:7px 4px 7px;color:var(--muted);font-size:10px;font-weight:650;background:linear-gradient(180deg,var(--bg) 62%,rgba(7,9,13,0));backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
+.form-error{margin:3px 2px 9px;padding:9px 10px;border-radius:12px;background:rgba(255,126,141,.075);color:#ffb0ba;font-size:10px;line-height:1.35}
+
+/* Settings: powerful options stay one level deeper. */
+.settings-badge{min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:rgba(255,126,141,.12);color:#ffc0c8;font-size:9px;display:grid;place-items:center}
+.settings-form{display:flex;flex-direction:column;gap:15px;padding-bottom:3px}
+.settings-block{padding:0 1px}.settings-block>label{display:block;font-size:10px;color:var(--muted);margin:0 0 8px 2px}.settings-block>small{display:block;color:var(--subtle);font-size:9px;line-height:1.45;margin:7px 2px 0}
+.option-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;padding:3px;background:rgba(255,255,255,.04);border-radius:14px}
+.option-grid.two{grid-template-columns:repeat(2,1fr)}.option-grid.three{grid-template-columns:repeat(3,1fr)}
+.option-grid button{min-height:38px;padding:6px;border:0;border-radius:11px;background:transparent;color:var(--muted);font-size:9px}
+.option-grid button.active{background:rgba(var(--accent-rgb),.14);color:#eef3ff;box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.13)}
+.accent-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.accent-choice{min-height:43px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.025);color:var(--muted);font-size:10px;display:flex;align-items:center;gap:8px;padding:9px 10px}.accent-choice.active{border-color:rgba(var(--accent-rgb),.32);background:rgba(var(--accent-rgb),.08);color:var(--text)}
+.accent-choice i{width:15px;height:15px;border-radius:50%}.accent-blue{background:#7ea7ff}.accent-violet{background:#a98cff}.accent-green{background:#62d2aa}.accent-graphite{background:#aeb7c6}
+.tech-details{margin-top:26px}.tech-details summary{list-style:none;color:var(--subtle);font-size:10px;padding:5px 2px 10px;cursor:pointer}.tech-details summary::-webkit-details-marker{display:none}.tech-details summary::after{content:'⌄';float:right}.tech-details[open] summary::after{content:'⌃'}
+.month-close-title{text-transform:capitalize;color:var(--muted);font-size:11px;margin:3px 1px 10px}.month-close-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.month-close-grid>div{padding:12px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.025)}.month-close-grid small{display:block;color:var(--muted);font-size:9px}.month-close-grid strong{display:block;margin-top:5px;font-size:17px}.month-close p{font-size:11px;line-height:1.5;color:var(--muted);margin:12px 2px 0}
+
+/* Contextual quick-add menu: the capture action can breathe. */
+.quick-add-grid button[data-add-kind="capture"]{grid-column:1/-1;min-height:82px}
+
+/* User's animation choice is global, but input/selection stays immediate enough. */
+.card,.clean-surface,.list-surface,.forecast-panel,.simulator-panel,.chart-surface,.donut-surface,
+.account-item,.tx-item,.plan-item,.timeline-item,.goal-item,.goal-overview,.budget-overview,.list-button,
+.circle-link,.icon-btn,.primary-btn,.secondary-btn,.danger-btn,.event-done,.choice-chip,.filter-chip,
+.forecast-range-tabs button,.pill-tabs button,.quick-add-grid button,.attention-card,.inbox-item,.accent-choice,.option-grid button{
+  transition-duration:var(--motion-fast),var(--motion-fast),var(--motion-base),var(--motion-base),var(--motion-base)!important;
+}
+html[data-motion="minimal"] *{animation-duration:1ms!important;transition-duration:1ms!important}
+
+@media(max-width:390px){
+  .option-grid{grid-template-columns:repeat(3,1fr)}
+  .option-grid button:nth-child(n+4){min-height:34px}
+  .attention-card{grid-template-columns:32px minmax(0,1fr) auto 15px;padding:11px 10px;gap:8px}
+}
+.primary-btn,.nav-add{background:var(--accent)!important}
+.chart-line{stroke:var(--accent)!important}
+.budget-track i,.goal-progress i,.progress i{background:var(--accent)}
+.filter-chip.active,.choice-chip.active{background:rgba(var(--accent-rgb),.13);border-color:rgba(var(--accent-rgb),.32)}
+.settings-icon,.account-icon.system-glyph,.daily-guide>span{color:var(--accent)}
+.main-transition-ghost{background:var(--bg);backface-visibility:hidden;transform:translateZ(0);contain:paint}
+.toast{transition:transform var(--motion-slow) var(--ease-natural),opacity var(--motion-base) ease!important}
+.advanced-details .advanced-body{animation-duration:var(--motion-base)!important}
+.empty-inline{animation-duration:var(--motion-base)!important}
+button.is-pressed{transition:transform var(--motion-instant) ease,opacity var(--motion-instant) ease!important}
+.reconcile-preview{margin:8px 1px 14px;padding:10px 11px;border-radius:13px;background:rgba(255,255,255,.035);color:var(--muted);font-size:11px;text-align:center}
+html{--accent-soft:rgba(var(--accent-rgb),.14)}

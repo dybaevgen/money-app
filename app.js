@@ -5,8 +5,11 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '3.1.0';
+const APP_VERSION = '3.2.0';
 let undoAction = null;
+let previousTab = 'overview';
+let pageTransitionTimer = null;
+let displaySnapshot = new Map();
 
 const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
@@ -637,6 +640,122 @@ function donutHTML(items){
   return `<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${parts.join(',')})"></div><div class="legend">${legend}</div></div>`;
 }
 
+
+function parseMoneyText(text=''){
+  if(!text || text.includes('•')) return null;
+  const sign=text.includes('−')?-1:1;
+  const cleaned=text.replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',','.');
+  const n=Number(cleaned);
+  return Number.isFinite(n)?sign*Math.abs(n):null;
+}
+function animateNumberElements(root=$('#main')){
+  if(!root || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const nodes=$$('.capital-value,.month-outlook-main strong,.item-amount,.kpi strong,.stats-hero strong,.month-summary-line strong',root);
+  nodes.forEach((el,i)=>{
+    const target=parseMoneyText(el.textContent);
+    if(target===null) return;
+    const key=`${activeTab}:${i}:${el.className}`;
+    const prev=displaySnapshot.get(key);
+    displaySnapshot.set(key,target);
+    if(prev===undefined || Math.abs(target-prev)<0.005) return;
+    const start=performance.now(), dur=420;
+    const decimals=/,\d{2}/.test(el.textContent)?2:0;
+    const signed=/^[+−]/.test(el.textContent.trim());
+    const frame=now=>{
+      const t=Math.min(1,(now-start)/dur);
+      const ease=1-Math.pow(1-t,3);
+      const v=prev+(target-prev)*ease;
+      const abs=new Intl.NumberFormat('de-DE',{minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(Math.abs(v));
+      const sign=signed?(v>0?'+':v<0?'−':''):(v<0?'−':'');
+      el.textContent=`${sign}${abs} €`;
+      if(t<1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+function pulseElement(el){
+  if(!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  el.animate([{transform:'scale(.97)'},{transform:'scale(1.015)'},{transform:'scale(1)'}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});
+}
+function tabIndex(tab){ return ['overview','transactions','plan','stats','more'].indexOf(tab); }
+function switchTab(next){
+  if(!next || next===activeTab) return;
+  previousTab=activeTab;
+  const oldIndex=tabIndex(activeTab), newIndex=tabIndex(next);
+  activeTab=next;
+  const main=$('#main');
+  if(main){
+    main.classList.remove('page-enter-left','page-enter-right');
+    main.classList.add(newIndex>=oldIndex?'page-exit-left':'page-exit-right');
+  }
+  clearTimeout(pageTransitionTimer);
+  pageTransitionTimer=setTimeout(()=>{
+    render();
+    const m=$('#main');
+    if(m){
+      m.classList.remove('page-exit-left','page-exit-right');
+      m.classList.add(newIndex>=oldIndex?'page-enter-right':'page-enter-left');
+      requestAnimationFrame(()=>requestAnimationFrame(()=>m.classList.remove('page-enter-left','page-enter-right')));
+    }
+    window.scrollTo({top:0,behavior:'instant'});
+  },95);
+}
+function installPressFeedback(root=document){
+  $$('button,[role="button"]',root).forEach(el=>{
+    if(el.dataset.pressBound) return;
+    el.dataset.pressBound='1';
+    el.addEventListener('pointerdown',()=>el.classList.add('is-pressed'),{passive:true});
+    ['pointerup','pointercancel','pointerleave'].forEach(n=>el.addEventListener(n,()=>el.classList.remove('is-pressed'),{passive:true}));
+  });
+}
+function bindSwipeRows(){
+  $$('.tx-item[data-tx]').forEach(row=>{
+    if(row.dataset.swipeBound) return;
+    row.dataset.swipeBound='1';
+    let id=null,startX=0,startY=0,dx=0,dragging=false;
+    row.addEventListener('pointerdown',e=>{id=e.pointerId;startX=e.clientX;startY=e.clientY;dx=0;dragging=false},{passive:true});
+    row.addEventListener('pointermove',e=>{
+      if(e.pointerId!==id)return;
+      const x=e.clientX-startX,y=e.clientY-startY;
+      if(!dragging && Math.abs(x)>10 && Math.abs(x)>Math.abs(y)*1.25) dragging=true;
+      if(!dragging)return;
+      dx=Math.max(-86,Math.min(74,x));
+      row.style.transition='none';
+      row.style.transform=`translateX(${dx}px)`;
+      row.classList.toggle('swipe-left',dx<-18);
+      row.classList.toggle('swipe-right',dx>18);
+    },{passive:true});
+    const end=e=>{
+      if(e.pointerId!==id)return;
+      id=null;
+      row.style.transition='transform .28s cubic-bezier(.2,.8,.2,1)';
+      const tx=state.transactions.find(t=>t.id===row.dataset.tx);
+      if(dx<-58 && tx){
+        row.style.transform='translateX(-110%)';
+        setTimeout(()=>deleteTransactionWithUndo(tx),170);
+      }else if(dx>54 && tx){
+        row.style.transform='translateX(0)';
+        setTimeout(()=>openTransactionSheet(null,tx.type,tx),80);
+      }else row.style.transform='translateX(0)';
+      row.classList.remove('swipe-left','swipe-right');
+      dx=0;dragging=false;
+    };
+    row.addEventListener('pointerup',end);row.addEventListener('pointercancel',end);
+  });
+}
+async function deleteTransactionWithUndo(tx){
+  if(!tx) return;
+  const removed={...tx};
+  state.transactions=state.transactions.filter(x=>x.id!==tx.id);
+  await persist();render();
+  showToast('Операция удалена','Отменить',async()=>{state.transactions.push(removed);await persist();render();showToast('Удаление отменено')});
+}
+function enhanceRenderedUI(){
+  installPressFeedback($('#main'));
+  animateNumberElements($('#main'));
+  if(activeTab==='transactions') bindSwipeRows();
+}
+
 function showToast(msg,actionLabel=null,action=null){
   const el=$('#toast');
   undoAction=typeof action==='function'?action:null;
@@ -653,7 +772,7 @@ function updateNavGlider(){
   const nav=$('.bottom-nav'), glider=$('.nav-glider'), active=$(`.nav-item[data-tab="${activeTab}"]`);
   if(!nav||!glider||!active)return;
   const slot=Number(active.dataset.navSlot);
-  glider.style.setProperty('--nav-index',Number.isFinite(slot)?slot:0);
+  nav.style.setProperty('--nav-index',Number.isFinite(slot)?slot:0);
 }
 
 function render(){
@@ -666,6 +785,7 @@ function render(){
   if(activeTab==='plan') renderPlan();
   if(activeTab==='stats') renderStats();
   if(activeTab==='more') renderMore();
+  requestAnimationFrame(enhanceRenderedUI);
 }
 
 function eventRow({p,date}){
@@ -802,6 +922,7 @@ function renderTransactions(){
     <div class="filter-row">
       ${[['all','Все'],['expense','Расходы'],['income','Доходы'],['transfer','Переводы']].map(([k,n])=>`<button class="filter-chip ${txFilter===k?'active':''}" data-filter="${k}">${n}</button>`).join('')}
     </div>
+    ${txs.length?'<div class="gesture-hint">Свайп вправо — повторить · влево — удалить</div>':''}
     <section class="section">
       ${txs.length?`<div class="tx-list list-surface">${txs.map(txRow).join('')}</div>`:`<div class="empty-inline"><strong>${txSearch?'Ничего не найдено':'Операций пока нет'}</strong><span>${txSearch?'Попробуйте другой запрос.':'Нажмите + и добавьте первый доход или расход.'}</span></div>`}
     </section>`;
@@ -1036,7 +1157,7 @@ function bindCommonActions(){
   $$('[data-action="manage-categories"]').forEach(b=>b.onclick=openCategoriesManager);
   $$('[data-action="add-budget"]').forEach(b=>b.onclick=()=>openBudgetSheet());
   $$('[data-action="add-goal"]').forEach(b=>b.onclick=()=>openGoalSheet());
-  $$('[data-tab-link]').forEach(b=>b.onclick=()=>{activeTab=b.dataset.tabLink;render()});
+  $$('[data-tab-link]').forEach(b=>b.onclick=()=>switchTab(b.dataset.tabLink));
   $$('[data-account]').forEach(b=>b.onclick=()=>openAccountSheet(account(b.dataset.account)));
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
   $$('[data-complete-plan]').forEach(b=>b.onclick=e=>{e.stopPropagation();completePlannedOccurrence(b.dataset.completePlan,b.dataset.completeDate)});
@@ -1051,25 +1172,38 @@ function bindCommonActions(){
 
 function openSheet(html){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
+  const previousFocus=document.activeElement;
+  sheet._previousFocus=previousFocus;
   sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"></div>${html}`;
   sheet.classList.remove('hidden'); backdrop.classList.remove('hidden');
-  requestAnimationFrame(()=>{sheet.classList.add('sheet-visible');backdrop.classList.add('sheet-visible')});
+  document.body.classList.add('sheet-open');
+  requestAnimationFrame(()=>{sheet.classList.add('sheet-visible');backdrop.classList.add('sheet-visible');installPressFeedback(sheet)});
   $$('.sheet-close').forEach(b=>b.onclick=closeSheet);
   const handle=$('.sheet-handle',sheet);
-  let pointerId=null,startY=0,lastY=0;
-  const reset=()=>{sheet.style.transition='transform .36s cubic-bezier(.2,.8,.2,1)';sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',380)};
+  let pointerId=null,startY=0,lastY=0,startT=0,lastT=0;
+  const reset=()=>{sheet.style.transition='transform .34s cubic-bezier(.18,.86,.24,1)';sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',350)};
   if(handle){
-    handle.addEventListener('pointerdown',e=>{pointerId=e.pointerId;startY=lastY=e.clientY;try{handle.setPointerCapture(e.pointerId)}catch(_){};sheet.style.transition='none'}, {passive:true});
-    handle.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;lastY=e.clientY;const dy=Math.max(0,lastY-startY);sheet.style.transform=`translateX(-50%) translateY(${dy}px)`;backdrop.style.opacity=String(Math.max(.25,1-dy/360))}, {passive:true});
-    const end=e=>{if(pointerId!==e.pointerId)return;const dy=Math.max(0,lastY-startY);pointerId=null;if(dy>95)closeSheet();else reset()};
+    handle.addEventListener('pointerdown',e=>{pointerId=e.pointerId;startY=lastY=e.clientY;startT=lastT=performance.now();try{handle.setPointerCapture(e.pointerId)}catch(_){};sheet.style.transition='none'}, {passive:true});
+    handle.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;lastY=e.clientY;lastT=performance.now();const dy=Math.max(0,lastY-startY);const resisted=dy<180?dy:180+(dy-180)*.55;sheet.style.transform=`translateX(-50%) translateY(${resisted}px)`;backdrop.style.opacity=String(Math.max(.18,1-dy/390))}, {passive:true});
+    const end=e=>{if(pointerId!==e.pointerId)return;const dy=Math.max(0,lastY-startY);const velocity=dy/Math.max(1,lastT-startT);pointerId=null;if(dy>88||velocity>.75)closeSheet();else reset()};
     handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
   }
+  setTimeout(()=>{
+    const auto=sheet.querySelector('.quick-amount input, input[autofocus]');
+    if(auto && !window.matchMedia('(pointer: fine)').matches) auto.focus({preventScroll:true});
+  },230);
 }
 function closeSheet(){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
+  if(sheet.classList.contains('hidden')) return;
+  const previousFocus=sheet._previousFocus;
   sheet.classList.remove('sheet-visible');backdrop.classList.remove('sheet-visible');
-  sheet.style.transform='translateX(-50%) translateY(24px)';backdrop.style.opacity='0';
-  setTimeout(()=>{sheet.classList.add('hidden');backdrop.classList.add('hidden');sheet.style.transform='';backdrop.style.opacity=''},220);
+  sheet.style.transform='translateX(-50%) translateY(105%)';backdrop.style.opacity='0';
+  document.body.classList.remove('sheet-open');
+  setTimeout(()=>{
+    sheet.classList.add('hidden');backdrop.classList.add('hidden');sheet.style.transform='';backdrop.style.opacity='';
+    if(previousFocus && previousFocus.focus) try{previousFocus.focus({preventScroll:true})}catch(_){}
+  },260);
 }
 
 function categoryOptions(type,selected=''){
@@ -1279,7 +1413,7 @@ function openQuickAddMenu(){
 }
 
 function bindShell(){
-  $$('.nav-item').forEach(b=>b.onclick=()=>{activeTab=b.dataset.tab;render()});
+  $$('.nav-item').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
   const fab=$('#fab');
   if(fab){
     let holdTimer=null,held=false;
@@ -1307,7 +1441,7 @@ async function init(){
   const saved=await dbGet().catch(()=>null); state=normalizeState(saved||defaultState()); if(!saved)await persist();
   planForecastRange=Math.min(18,Math.max(3,planForecastRange));
   const now=new Date(); $('#todayLabel').textContent=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(now);
-  $('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye'); bindShell(); render();
+  $('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye'); bindShell(); document.body.classList.add('app-loading'); render(); requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('app-loading')));
   if('serviceWorker' in navigator){window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('./service-worker.js');await reg.update();if(reg.waiting)showToast('Доступна новая версия','Обновить',()=>{reg.waiting.postMessage({type:'SKIP_WAITING'});location.reload()});reg.addEventListener('updatefound',()=>{const w=reg.installing;if(w)w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showToast('Доступна новая версия','Обновить',()=>location.reload())})})}catch(_){}});}
 }
 

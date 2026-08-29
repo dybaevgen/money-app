@@ -514,3 +514,156 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0
 @media(max-width:390px){
   .stats-hero{grid-template-columns:1fr 1fr}
 }
+
+/* =========================================================
+   V3.2 — Interaction, motion and tactile polish
+   ========================================================= */
+html{scroll-behavior:smooth}
+body{
+  -webkit-tap-highlight-color:transparent;
+  text-rendering:optimizeLegibility;
+}
+body.sheet-open{overflow:hidden}
+button,input,select,textarea{-webkit-tap-highlight-color:transparent}
+button{transform:translateZ(0);will-change:transform}
+button.is-pressed{
+  transform:scale(.972)!important;
+  opacity:.88;
+  transition:transform .09s ease,opacity .09s ease!important;
+}
+.nav-item.is-pressed{transform:scale(.93)!important}
+.nav-add.is-pressed{transform:scale(.91)!important}
+.main{
+  transform:translate3d(0,0,0);
+  transition:opacity .16s ease,transform .22s cubic-bezier(.2,.8,.2,1);
+  will-change:transform,opacity;
+}
+.main.page-exit-left{opacity:.25;transform:translate3d(-16px,0,0)}
+.main.page-exit-right{opacity:.25;transform:translate3d(16px,0,0)}
+.main.page-enter-right{opacity:.35;transform:translate3d(14px,0,0)}
+.main.page-enter-left{opacity:.35;transform:translate3d(-14px,0,0)}
+body.app-loading .main,
+body.app-loading .topbar,
+body.app-loading .bottom-nav{opacity:0}
+.topbar,.bottom-nav{transition:opacity .24s ease}
+.nav-glider{
+  transition:transform .42s cubic-bezier(.22,.9,.24,1),width .28s ease,background .2s ease;
+  will-change:transform;
+}
+.nav-item .nav-icon,.nav-item small{
+  transition:transform .25s cubic-bezier(.2,.8,.2,1),color .2s ease,opacity .2s ease;
+}
+.nav-item.active .nav-icon{transform:translateY(-1px)}
+.nav-item.active small{transform:translateY(1px)}
+.nav-add{
+  transition:transform .22s cubic-bezier(.2,.8,.2,1),filter .2s ease,background .2s ease;
+}
+.sheet-backdrop{
+  transition:opacity .26s ease;
+  will-change:opacity;
+}
+.sheet{
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  transform:translateX(-50%) translateY(105%);
+  opacity:1;
+  transition:transform .38s cubic-bezier(.18,.86,.24,1);
+  will-change:transform;
+}
+.sheet.sheet-visible{transform:translateX(-50%) translateY(0)}
+.sheet-handle{
+  cursor:grab;
+  transition:width .18s ease,background .18s ease;
+}
+.sheet-handle:active{width:48px;background:#667080}
+.field input:focus,.field select:focus,.field textarea:focus,
+.scenario-grid input:focus,.tx-search input:focus{
+  border-color:rgba(126,167,255,.42);
+  box-shadow:0 0 0 3px rgba(126,167,255,.08);
+  transition:border-color .18s ease,box-shadow .18s ease,background .18s ease;
+}
+.choice-chip,.filter-chip,.forecast-range-tabs button,.pill-tabs button{
+  transition:transform .16s ease,background .2s ease,border-color .2s ease,color .2s ease;
+}
+.choice-chip.active,.filter-chip.active{transform:translateY(-1px)}
+.budget-track i,.goal-progress i,.progress i{
+  transition:width .55s cubic-bezier(.2,.8,.2,1);
+}
+.chart-line{
+  stroke-dasharray:1200;
+  stroke-dashoffset:1200;
+  animation:chartDraw .72s cubic-bezier(.2,.8,.2,1) forwards;
+}
+@keyframes chartDraw{to{stroke-dashoffset:0}}
+.chart-area{animation:chartFade .55s .14s ease both}
+@keyframes chartFade{from{opacity:0}to{opacity:.7}}
+.chart-event-dot,.chart-dot{animation:dotPop .28s .35s ease both;transform-box:fill-box;transform-origin:center}
+@keyframes dotPop{from{opacity:0;transform:scale(.5)}to{opacity:.72;transform:scale(1)}}
+.chart-cursor,.chart-cursor-dot,.chart-tooltip{transition:opacity .08s linear}
+.toast{
+  transform:translate3d(-50%,18px,0) scale(.97);
+  opacity:0;
+  transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .2s ease;
+}
+.toast:not(.hidden){
+  transform:translate3d(-50%,0,0) scale(1);
+  opacity:1;
+}
+.tx-list{position:relative}
+.tx-item{
+  position:relative;
+  z-index:1;
+  touch-action:pan-y;
+  will-change:transform;
+  transition:transform .28s cubic-bezier(.2,.8,.2,1),background .18s ease;
+}
+.tx-item::before,.tx-item::after{
+  position:absolute;
+  top:0;bottom:0;
+  display:grid;place-items:center;
+  width:86px;
+  font-size:10px;font-weight:700;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .12s ease;
+}
+.tx-item::before{
+  content:"Повторить";
+  right:100%;
+  color:#b8c9ee;
+  background:rgba(126,167,255,.10);
+}
+.tx-item::after{
+  content:"Удалить";
+  left:100%;
+  color:#ffc0c8;
+  background:rgba(255,126,141,.10);
+}
+.tx-item.swipe-right::before,.tx-item.swipe-left::after{opacity:1}
+.account-item,.plan-item,.timeline-item,.goal-overview,.budget-overview,.list-button{
+  transition:background .18s ease,transform .12s ease;
+}
+.capital-value,.item-amount,.kpi strong,.stats-hero strong,.month-summary-line strong{
+  font-variant-numeric:tabular-nums;
+}
+.quick-amount input{
+  transition:font-size .2s ease,color .2s ease;
+}
+.quick-amount:focus-within input{color:#fff}
+.advanced-details .advanced-body{
+  animation:detailsOpen .24s ease both;
+  transform-origin:top;
+}
+@keyframes detailsOpen{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.empty-inline{animation:softAppear .28s ease both}
+@keyframes softAppear{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    scroll-behavior:auto!important;
+    animation-duration:.001ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:.001ms!important;
+  }
+}
+
+.gesture-hint{margin:10px 3px -14px;color:var(--subtle);font-size:9px;text-align:center;opacity:.78}

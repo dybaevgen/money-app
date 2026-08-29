@@ -514,10 +514,10 @@ function showToast(msg){
 
 function setPageTitle(title){ $('#pageTitle').textContent=title; }
 function updateNavGlider(){
-  const nav=$('.bottom-nav'), glider=$('.nav-glider'), items=$$('.nav-item');
-  if(!nav||!glider||!items.length)return;
-  const idx=Math.max(0,items.findIndex(b=>b.dataset.tab===activeTab));
-  glider.style.setProperty('--nav-index',idx);
+  const nav=$('.bottom-nav'), glider=$('.nav-glider'), active=$(`.nav-item[data-tab="${activeTab}"]`);
+  if(!nav||!glider||!active)return;
+  const slot=Number(active.dataset.navSlot);
+  glider.style.setProperty('--nav-index',Number.isFinite(slot)?slot:0);
 }
 
 function render(){

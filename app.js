@@ -5,11 +5,12 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.0.0';
+const APP_VERSION = '4.1.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
 let displaySnapshot = new Map();
+let forceNumberRise = true;
 
 const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
@@ -52,7 +53,8 @@ function uiIcon(name, cls=''){
     check:'<path d="m5 12 4 4L19 6"/>',
     eye:'<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/>',
     eyeoff:'<path d="m4 4 16 16M9.9 6.3A9.7 9.7 0 0 1 12 6c6 0 9.5 6 9.5 6a15.5 15.5 0 0 1-2.7 3.4M6.1 7.1A15 15 0 0 0 2.5 12s3.5 6 9.5 6c1.2 0 2.3-.2 3.3-.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
-    goal:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M18 6 21 3M18 3h3v3"/>'
+    goal:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M18 6 21 3M18 3h3v3"/>',
+    sparkles:'<path d="m12 3 1.2 3.3L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.2ZM18.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8ZM5.5 14l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>'
   };
   return `<svg class="ui-icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths[name]||paths.info}</svg>`;
 }
@@ -367,6 +369,8 @@ function forecastSeries(months=12, scenario={}){
       id:p.id,
       date:toISODate(date),
       title:p.title||planCategory(p)?.name||'План',
+      category:planCategory(p)?.name||'Без категории',
+      account:account(p.accountId)?.name||'',
       type:p.type,
       amount:Number(p.amount)||0,
       required:Boolean(p.required)
@@ -406,6 +410,116 @@ function monthlyCashflowHealth(series){
     worstDeficit:worst,
     required:worst?Math.ceil(worst.shortfall*100)/100:0
   };
+}
+
+
+function forecastRowBreakdown(row){
+  const events=Array.isArray(row?.events)?row.events:[];
+  const expenseEvents=events.filter(e=>e.type==='expense');
+  const incomeEvents=events.filter(e=>e.type==='income');
+  const sumExp=expenseEvents.reduce((s,e)=>s+Number(e.amount||0),0);
+  const sumInc=incomeEvents.reduce((s,e)=>s+Number(e.amount||0),0);
+  const group=(rows)=>{
+    const m=new Map();
+    rows.forEach(e=>{
+      const key=e.title||e.category||'Без названия';
+      const prev=m.get(key)||{title:key,category:e.category||'',amount:0,required:false};
+      prev.amount+=Number(e.amount||0);
+      prev.required=prev.required||Boolean(e.required);
+      m.set(key,prev);
+    });
+    return [...m.values()].sort((a,b)=>b.amount-a.amount);
+  };
+  return {
+    expenses:group(expenseEvents),
+    incomes:group(incomeEvents),
+    unassignedExpense:Math.max(0,(Number(row?.expense)||0)-sumExp),
+    unassignedIncome:Math.max(0,(Number(row?.income)||0)-sumInc)
+  };
+}
+function planAlgorithmAnalysis(forecast, health){
+  const rows=forecast.series.slice(1);
+  const deficits=rows.filter(r=>(Number(r.expense)||0)>(Number(r.income)||0)+.005);
+  const messages=[];
+  if(deficits.length){
+    const worst=health.cashflow.worstDeficit;
+    messages.push({
+      level:'priority',
+      title:`Закрыть базовый разрыв ${fmtMajor(health.cashflow.required)} / мес.`,
+      text:`Это минимальная прибавка к доходу или такое же сокращение расходов, чтобы даже самый дефицитный месяц (${esc(worst?.tooltipLabel||worst?.label||'')}) перестал быть отрицательным.`
+    });
+    const optional=[];
+    let requiredTotal=0, expenseTotal=0;
+    deficits.forEach(r=>{
+      const b=forecastRowBreakdown(r);
+      b.expenses.forEach(e=>{
+        expenseTotal+=e.amount;
+        if(e.required) requiredTotal+=e.amount;
+        else optional.push({...e,month:r.tooltipLabel||r.label});
+      });
+      expenseTotal+=b.unassignedExpense;
+    });
+    optional.sort((a,b)=>b.amount-a.amount);
+    if(optional.length){
+      const top=optional[0];
+      messages.push({
+        level:'action',
+        title:`Проверить необязательные траты`,
+        text:`Самая крупная гибкая плановая трата в дефицитных месяцах — ${esc(top.title)} ${fmtMajor(top.amount)} (${esc(top.month)}). Её перенос или уменьшение сразу сокращает дефицит.`
+      });
+    }
+    if(expenseTotal>0 && requiredTotal/expenseTotal>=.7){
+      messages.push({
+        level:'info',
+        title:'Основная нагрузка — обязательные расходы',
+        text:`Около ${Math.round(requiredTotal/expenseTotal*100)}% явно размеченных расходов в дефицитных месяцах обязательные. В такой структуре безопаснее в первую очередь увеличивать регулярный доход, а не пытаться урезать небольшие переменные категории.`
+      });
+    }
+    if(deficits.length>=Math.ceil(rows.length*.6)){
+      messages.push({
+        level:'info',
+        title:'Дефицит носит системный характер',
+        text:`Отрицательный результат есть в ${deficits.length} из ${rows.length} месяцев. Это уже не единичная крупная покупка: стоит менять ежемесячный баланс доходов и расходов.`
+      });
+    }else if(deficits.length===1){
+      messages.push({
+        level:'info',
+        title:'Проблема локальная',
+        text:'Дефицит возникает только в одном месяце. Сначала проверьте разовые покупки и возможность перенести их, прежде чем менять постоянный ежемесячный бюджет.'
+      });
+    }
+  }else{
+    const avgNet=rows.length?rows.reduce((s,r)=>s+(Number(r.income)||0)-(Number(r.expense)||0),0)/rows.length:0;
+    messages.push({
+      level:'good',
+      title:'План сбалансирован',
+      text:`Во всех выбранных месяцах доходы покрывают расходы. Средний расчётный результат месяца: ${fmtMajor(avgNet,true)}.`
+    });
+    if(avgNet>0){
+      messages.push({
+        level:'info',
+        title:'Есть пространство для цели или резерва',
+        text:`Если этот запас устойчив, часть среднего профицита ${fmtMajor(avgNet)} можно направлять в защищённые накопления или финансовую цель.`
+      });
+    }
+  }
+  const final=forecast.series.at(-1)?.value??totalBalance();
+  if(final<0){
+    messages.push({level:'priority',title:'Капитал уходит ниже нуля',text:`К концу выбранного периода расчётный капитал составляет ${fmtMajor(final)}. Одного исправления отдельного месяца недостаточно — нужен более крупный пересмотр плана.`});
+  }
+  return messages.slice(0,5);
+}
+function planMonthDetailHTML(row){
+  const b=forecastRowBreakdown(row);
+  const expenseLines=b.expenses.map(e=>`<li><span>${e.required?'<b class="required-dot">обяз.</b> ':''}${esc(e.title)}</span><strong>−${fmtMajor(e.amount)}</strong></li>`).join('');
+  const incomeLines=b.incomes.map(e=>`<li><span>${esc(e.title)}</span><strong class="positive">+${fmtMajor(e.amount)}</strong></li>`).join('');
+  const otherExp=b.unassignedExpense>.005?`<li><span>Средние/неразмеченные расходы</span><strong>−${fmtMajor(b.unassignedExpense)}</strong></li>`:'';
+  const otherInc=b.unassignedIncome>.005?`<li><span>Средний/неразмеченный доход</span><strong class="positive">+${fmtMajor(b.unassignedIncome)}</strong></li>`:'';
+  return `<div class="deficit-month-card">
+    <div class="deficit-month-head"><div><small>${esc(row.tooltipLabel||row.label||'')}</small><strong class="negative">${fmtMajor(row.net,true)}</strong></div><div class="deficit-flow"><span>+${fmtMajor(row.income)}</span><span>−${fmtMajor(row.expense)}</span></div></div>
+    ${(incomeLines||otherInc)?`<div class="breakdown-group"><b>Приходит</b><ul>${incomeLines}${otherInc}</ul></div>`:''}
+    <div class="breakdown-group"><b>Уходит</b><ul>${expenseLines}${otherExp||'<li><span>Расходы по расчёту месяца</span><strong>−'+fmtMajor(row.expense)+'</strong></li>'}</ul></div>
+  </div>`;
 }
 
 function forecastHealth(series){
@@ -452,6 +566,17 @@ function upcomingPlans(days=45){
   const now=new Date(); now.setHours(0,0,0,0);
   const end=new Date(now); end.setDate(end.getDate()+days); end.setHours(23,59,59,999);
   return planOccurrencesBetween(now,end);
+}
+
+function primaryUpcomingPlans(){
+  const now=new Date(); now.setHours(0,0,0,0);
+  // До 20-го числа — только остаток текущего месяца.
+  // С 20-го — остаток текущего + весь следующий месяц.
+  const end=now.getDate()>=20 ? endOfMonth(addMonths(now,1)) : endOfMonth(now);
+  return planOccurrencesBetween(now,end);
+}
+function allUpcoming30Days(){
+  return upcomingPlans(30);
 }
 
 function monthRemainingPlans(){
@@ -716,7 +841,7 @@ function bindInteractiveCharts(){
       const y=pt+(scaleMax-(Number(d.value)||0))/(scaleMax-scaleMin)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
-      const eventText=Array.isArray(d.events)&&d.events.length?`<em>${d.events.slice(0,2).map(x=>`${esc(x.title)} ${fmt(x.type==='income'?x.amount:-x.amount,true)}`).join('<br>')}${d.events.length>2?`<br>+ ещё ${d.events.length-2}`:''}</em>`:'';
+      const eventText=Array.isArray(d.events)&&d.events.length?`<div class="chart-event-list">${d.events.map(x=>`<div class="chart-event-row"><span>${esc(x.title)}${x.category&&x.category!==x.title?`<small>${esc(x.category)}</small>`:''}</span><b class="${x.type==='income'?'positive':'negative'}">${fmt(x.type==='income'?x.amount:-x.amount,true)}</b></div>`).join('')}</div>`:'';
       tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}${eventText}`;
       const pct=x/vb.width*100;tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
@@ -781,7 +906,8 @@ function animateNumberElements(root=$('#main')){
     const target=parseMoneyText(el.textContent);
     if(target===null) return;
     const key=`${activeTab}:${i}:${el.className}`;
-    const prev=displaySnapshot.get(key);
+    const stored=displaySnapshot.get(key);
+    const prev=forceNumberRise?0:stored;
     displaySnapshot.set(key,target);
     if(prev===undefined || Math.abs(target-prev)<0.005) return;
     const start=performance.now(), dur=motionMs(420);
@@ -798,6 +924,7 @@ function animateNumberElements(root=$('#main')){
     };
     requestAnimationFrame(frame);
   });
+  forceNumberRise=false;
 }
 function pulseElement(el){
   if(!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -850,6 +977,7 @@ function switchTab(next){
   const oldIndex=tabIndex(activeTab), newIndex=tabIndex(next);
   const direction=newIndex>=oldIndex?1:-1;
   const update=()=>{
+    forceNumberRise=true;
     activeTab=next;
     window.scrollTo({top:Number(uiMemory.scroll?.[next])||0,left:0,behavior:'instant'});
     render({motion:'none'});
@@ -958,7 +1086,7 @@ function eventRow({p,date}){
   const mon=new Intl.DateTimeFormat('ru-RU',{month:'short'}).format(date).replace('.','');
   const title=p.title||c?.name||'Плановая операция';
   const badge=p.type==='expense'&&p.required?'<span class="event-badge required">обяз.</span>':p.type==='income'?'<span class="event-badge income">доход</span>':'<span class="event-badge">план</span>';
-  return `<div class="timeline-item">
+  return `<div class="timeline-item" data-plan="${p.id}">
     <div class="timeline-date"><strong>${esc(day)}</strong><span>${esc(mon)}</span></div>
     <div class="timeline-main"><div class="timeline-title">${esc(title)} ${badge}</div><div class="timeline-sub">${esc(a?.name||'Без счёта')}${p.frequency==='monthly'?' · ежемесячно':''}</div></div>
     <div class="timeline-money ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div>
@@ -994,7 +1122,7 @@ function renderOverview(){
   const free=freeBalance();
   const monthPlan=monthRemainingSummary();
   const monthEnd=monthPlan.projected;
-  const timeline=upcomingPlans(45).slice(0,Math.max(3,Math.min(8,Number(state.settings.upcomingCount)||5)));
+  const timeline=primaryUpcomingPlans().slice(0,Math.max(3,Math.min(8,Number(state.settings.upcomingCount)||5)));
   const budgets=budgetSnapshot().slice(0,3);
   const goals=state.goals.slice(0,2);
   const forecast=forecastSeries(6);
@@ -1036,7 +1164,7 @@ function renderOverview(){
     </div>
 
     <section class="section">
-      <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
+      <div class="section-head"><h2>Ближайшие события</h2><button class="round-section-action" data-action="all-events" aria-label="Показать события на 30 дней">＋</button></div>
       ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>План пока пуст</strong><span>Добавьте зарплату, аренду или будущую покупку.</span></div>`}
     </section>
 
@@ -1195,32 +1323,39 @@ function planForecastHTML(){
   const health=forecastHealth(forecast.series);
   const start=totalBalance();
   const change=final-start;
+  const deficitRows=forecast.series.slice(1).map((r,index)=>({...r,index:index+1,net:(Number(r.income)||0)-(Number(r.expense)||0),shortfall:Math.max(0,(Number(r.expense)||0)-(Number(r.income)||0))})).filter(r=>r.shortfall>.005);
+  const analysis=planAlgorithmAnalysis(forecast,health);
   return `<div class="chart plan-chart">${svgLine(forecast.series,{interactive:true,height:'large'})}</div>
     <div class="grid-3 plan-kpis">
-      <div class="kpi"><small>Через ${planForecastRange} мес.</small><strong class="${final>=start?'positive':'negative'}">${fmt(final)}</strong></div>
-      <div class="kpi"><small>Минимум</small><strong class="${health.min>=0?'positive':'negative'}">${fmt(health.min)}</strong></div>
-      <div class="kpi"><small>Изменение</small><strong class="${change>=0?'positive':'negative'}">${fmt(change,true)}</strong></div>
+      <div class="kpi"><small>Через ${planForecastRange} мес.</small><strong class="${final>=start?'positive':'negative'}">${fmtMajor(final)}</strong></div>
+      <div class="kpi"><small>Минимум</small><strong class="${health.min>=0?'positive':'negative'}">${fmtMajor(health.min)}</strong></div>
+      <div class="kpi"><small>Изменение</small><strong class="${change>=0?'positive':'negative'}">${fmtMajor(change,true)}</strong></div>
     </div>
-    ${health.cashflow.required>0?(()=>{
-      const w=health.cashflow.worstDeficit;
-      const label=w?.tooltipLabel||w?.label||'самом дефицитном месяце';
-      const income=Number(w?.income)||0, expense=Number(w?.expense)||0, shortfall=Number(w?.shortfall)||health.cashflow.required;
-      return `<div class="plan-advice warning ${uiMemory.planExplain?'open':''}">
-        <div class="plan-advice-head">
-          <div><small>В выбранном периоде есть дефицитные месяцы</small><strong>Нужно зарабатывать ещё ${fmt(health.cashflow.required)} / месяц</strong></div>
-          <button class="plan-explain-toggle" type="button" aria-expanded="${uiMemory.planExplain?'true':'false'}" aria-label="${uiMemory.planExplain?'Скрыть объяснение':'Показать объяснение'}"><span></span><span></span></button>
+    ${health.cashflow.required>0?`<div class="plan-advice warning ${uiMemory.planExplain?'open':''}">
+      <div class="plan-advice-head">
+        <div><small>В выбранном периоде есть дефицитные месяцы</small><strong>Нужно ещё ${fmtMajor(health.cashflow.required)} / месяц</strong></div>
+        <button class="plan-explain-toggle" type="button" aria-expanded="${uiMemory.planExplain?'true':'false'}" aria-label="${uiMemory.planExplain?'Скрыть объяснение':'Показать объяснение'}"><span></span><span></span></button>
+      </div>
+      <div class="plan-advice-details"><div>
+        <p><b>Что означает эта сумма?</b></p>
+        <p>${fmtMajor(health.cashflow.required)} — это минимальная прибавка к ежемесячному доходу <b>или</b> такое же сокращение расходов, которое закрывает самый большой дефицит выбранного периода. Это не означает, что весь накопленный капитал уже заканчивается.</p>
+        <p class="plan-advice-meta">Дефицитных месяцев: ${deficitRows.length} из ${planForecastRange}. Ниже показан каждый из них.</p>
+        <div class="deficit-months">${deficitRows.map(planMonthDetailHTML).join('')}</div>
+        <div class="algorithm-analysis"><div class="analysis-title"><span>${uiIcon('sparkles')}</span><div><b>Алгоритмический анализ плана</b><small>Без ИИ — только правила и ваши числа</small></div></div>
+          ${analysis.map(a=>`<div class="analysis-row ${a.level}"><strong>${a.title}</strong><p>${a.text}</p></div>`).join('')}
         </div>
-        <div class="plan-advice-details"><div>
-          <p><b>Почему именно ${fmt(health.cashflow.required)}?</b></p>
-          <p>Самый дефицитный месяц — <b>${esc(label)}</b>. По плану в нём приходит ${fmt(income)}, а уходит ${fmt(expense)}. Разница составляет <b>−${fmt(shortfall)}</b>.</p>
-          <p>Поэтому ${fmt(health.cashflow.required)} в месяц — минимальная дополнительная сумма, которая закрывает самый большой месячный дефицит в выбранных ${planForecastRange} месяцах.</p>
-          <p>Это <b>не означает</b>, что весь капитал станет отрицательным. Здесь сравниваются именно доходы и расходы каждого отдельного месяца; накопления считаются отдельно на графике капитала.</p>
-          <p class="plan-advice-meta">Дефицитных месяцев: ${health.cashflow.deficitMonths} из ${planForecastRange}.</p>
-        </div></div>
-      </div>`;
-    })():`<div class="notice good">Месячный план сбалансирован: во всех месяцах выбранного периода доходы не ниже расходов. Минимальный расчётный капитал: <b>${fmt(health.min)}</b>.</div>`}`;
+      </div></div>
+    </div>`:`<div class="plan-advice good ${uiMemory.planExplain?'open':''}">
+      <div class="plan-advice-head">
+        <div><small>Месячный план сбалансирован</small><strong>Во всех месяцах доходы покрывают расходы</strong></div>
+        <button class="plan-explain-toggle" type="button" aria-expanded="${uiMemory.planExplain?'true':'false'}"><span></span><span></span></button>
+      </div>
+      <div class="plan-advice-details"><div>
+        <p>Минимальный расчётный капитал: <b>${fmtMajor(health.min)}</b>.</p>
+        <div class="algorithm-analysis">${analysis.map(a=>`<div class="analysis-row ${a.level}"><strong>${a.title}</strong><p>${a.text}</p></div>`).join('')}</div>
+      </div></div>
+    </div>`}`;
 }
-
 function bindPlanAdvice(root=document){
   $$('.plan-explain-toggle',root).forEach(btn=>{
     if(btn.dataset.bound)return;btn.dataset.bound='1';
@@ -1255,7 +1390,7 @@ function renderPlan(){
   const recurringIncome=hasRecurringPlan('income')?recurringPlanMonthly('income',nextMonth):actualAverage('income');
   const recurringExpense=hasRecurringPlan('expense')?recurringPlanMonthly('expense',nextMonth):actualAverage('expense');
   const due=monthRemainingSummary();
-  const timeline=upcomingPlans(60).slice(0,10);
+  const timeline=primaryUpcomingPlans();
   const budgets=budgetSnapshot();
   $('#main').innerHTML=`
     <section class="forecast-panel">
@@ -1267,8 +1402,8 @@ function renderPlan(){
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
-      ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>Нет будущих событий</strong><span>Добавьте регулярный доход, аренду или крупную покупку.</span></div>`}
+      <div class="section-head"><h2>Ближайшие события</h2><button class="round-section-action" data-action="all-events" aria-label="Показать события на 30 дней">＋</button></div>
+      ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>Нет событий в основном окне</strong><span>${new Date().getDate()>=20?'Показывается остаток текущего и весь следующий месяц.':'Показывается остаток текущего месяца.'}</span></div>`}<p class="subtle-copy event-window-note">${new Date().getDate()>=20?'С 20-го числа здесь показывается остаток текущего месяца и весь следующий.':'Здесь показываются события до конца текущего месяца.'} Нажмите +, чтобы увидеть ближайшие 30 дней.</p>
     </section>
 
     <section class="section">
@@ -1465,6 +1600,16 @@ async function completePlannedOccurrence(planId,dateISO){
   try{await persist()}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить · операция отменена')}
 }
 
+function openUpcomingEventsSheet(){
+  const rows=allUpcoming30Days();
+  openSheet(`<div class="sheet-head"><div><h3>Ближайшие 30 дней</h3><p class="sheet-subtitle">Все непроведённые плановые события от сегодняшнего дня.</p></div><button class="sheet-close">×</button></div>
+    ${rows.length?`<div class="timeline list-surface all-events-sheet">${rows.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>Нет событий</strong><span>В ближайшие 30 дней ничего не запланировано.</span></div>`}
+    <button class="secondary-btn" type="button" id="addPlanFromEvents">Добавить событие</button>`);
+  $$('.timeline-item[data-plan]', $('#sheet')).forEach(b=>b.onclick=e=>{if(e.target.closest('[data-complete-plan]'))return;const plan=state.plans.find(p=>p.id===b.dataset.plan);if(plan)openPlanDetail(plan)});
+  $$('[data-complete-plan]', $('#sheet')).forEach(b=>b.onclick=e=>{e.stopPropagation();completePlannedOccurrence(b.dataset.completePlan,b.dataset.completeDate)});
+  const add=$('#addPlanFromEvents');if(add)add.onclick=()=>openPlanSheet();
+}
+
 function bindCommonActions(){
   $$('[data-action="quick-expense"]').forEach(b=>b.onclick=()=>openTransactionSheet(null,'expense'));
   $$('[data-action="quick-income"]').forEach(b=>b.onclick=()=>openTransactionSheet(null,'income'));
@@ -1485,6 +1630,7 @@ function bindCommonActions(){
   $$('[data-action="appearance"]').forEach(b=>b.onclick=openAppearanceSettings);
   $$('[data-action="advanced-settings"]').forEach(b=>b.onclick=openAdvancedSettings);
   $$('[data-action="month-close"]').forEach(b=>b.onclick=openMonthCloseSheet);
+  $$('[data-action="all-events"]').forEach(b=>b.onclick=openUpcomingEventsSheet);
   const reserve=$('[data-action="reserve"]'); if(reserve)reserve.onclick=openReserveSheet;
   const exj=$('[data-action="export-json"]'); if(exj)exj.onclick=exportJSON;
   const imj=$('[data-action="import-json"]'); if(imj)imj.onclick=()=>$('#importInput').click();

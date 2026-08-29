@@ -5,6 +5,8 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
+const APP_VERSION = '3.1.0';
+let undoAction = null;
 
 const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
@@ -16,9 +18,48 @@ const todayISO = () => {
 };
 const esc = (s='') => String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
+function fmtMajor(n, signed=false){
+  const val=Number(n)||0;
+  if(state?.settings?.privacy) return '•••• €';
+  const abs=new Intl.NumberFormat('de-DE',{maximumFractionDigits:0}).format(Math.abs(val));
+  const sign=signed?(val>0?'+':val<0?'−':''):(val<0?'−':'');
+  return `${sign}${abs} €`;
+}
+function uiIcon(name, cls=''){
+  const paths={
+    card:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9.2h18M7 15h4"/>',
+    bank:'<path d="M3 9 12 4l9 5M5 10.5h14M6.5 10.5V18M10.2 10.5V18M13.8 10.5V18M17.5 10.5V18M4 20h16"/>',
+    cash:'<rect x="3" y="6" width="18" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.7"/><path d="M6 9h.01M18 15h.01"/>',
+    safe:'<rect x="4" y="3.5" width="16" height="17" rx="3"/><circle cx="12" cy="12" r="3.2"/><path d="M12 8.8v2.1l1.7 1.2M7 7h.01"/>',
+    wallet:'<path d="M4 7.5h14a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3h11v3.5"/><path d="M15 12h5v4h-5a2 2 0 0 1 0-4Z"/>',
+    transfer:'<path d="M7 5v13m0 0-3-3m3 3 3-3M17 19V6m0 0-3 3m3-3 3 3"/>',
+    tag:'<path d="M4 4h7l9 9-7 7-9-9Z"/><circle cx="8" cy="8" r="1.2"/>',
+    shield:'<path d="M12 3 19 6v5.2c0 4.5-2.8 7.5-7 9.8-4.2-2.3-7-5.3-7-9.8V6Z"/><path d="m9 12 2 2 4-4"/>',
+    upload:'<path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v5h14v-5"/>',
+    download:'<path d="M12 4v12m0 0-4-4m4 4 4-4M5 18v2h14v-2"/>',
+    file:'<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h5M9 13h6M9 17h5"/>',
+    search:'<circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/>',
+    plus:'<path d="M12 5v14M5 12h14"/>',
+    minus:'<path d="M5 12h14"/>',
+    calendar:'<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4M16 3v4M4 10h16"/>',
+    chart:'<path d="M4 19V11M10 19V5M16 19V9M22 19H2"/>',
+    info:'<circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7h.01"/>',
+    chevron:'<path d="m9 5 7 7-7 7"/>',
+    check:'<path d="m5 12 4 4L19 6"/>',
+    eye:'<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/>',
+    eyeoff:'<path d="m4 4 16 16M9.9 6.3A9.7 9.7 0 0 1 12 6c6 0 9.5 6 9.5 6a15.5 15.5 0 0 1-2.7 3.4M6.1 7.1A15 15 0 0 0 2.5 12s3.5 6 9.5 6c1.2 0 2.3-.2 3.3-.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+    goal:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M18 6 21 3M18 3h3v3"/>'
+  };
+  return `<svg class="ui-icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths[name]||paths.info}</svg>`;
+}
+function accountGlyph(type){
+  const key=type==='cash'?'cash':type==='bank'?'bank':type==='savings'?'safe':type==='credit'?'card':'card';
+  return uiIcon(key);
+}
+
 const defaultState = () => ({
   version: 3,
-  settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{} },
+  settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
     { id:'acc-cash', name:'Наличные', type:'cash', openingBalance:0, icon:'💶', protected:false }
@@ -469,8 +510,6 @@ function svgLine(data,{interactive=false,height='normal'}={}){
   let rawMin=Math.min(...vals), rawMax=Math.max(...vals);
   const rawRange=Math.max(1, rawMax-rawMin);
   let min=rawMin-rawRange*0.12, max=rawMax+rawRange*0.12;
-  if(rawMin>=0) min=0;
-  if(rawMax<=0) max=0;
   const approxStep=Math.max(1,(max-min)/2);
   const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
   const norm=approxStep/mag;
@@ -538,8 +577,6 @@ function bindInteractiveCharts(){
       let rawMin=Math.min(...values), rawMax=Math.max(...values);
       const rawRange=Math.max(1, rawMax-rawMin);
       let min=rawMin-rawRange*0.12, max=rawMax+rawRange*0.12;
-      if(rawMin>=0) min=0;
-      if(rawMax<=0) max=0;
       const approxStep=Math.max(1,(max-min)/2);
       const mag=10**Math.floor(Math.log10(Math.abs(approxStep)||1));
       const norm=approxStep/mag;
@@ -600,8 +637,15 @@ function donutHTML(items){
   return `<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${parts.join(',')})"></div><div class="legend">${legend}</div></div>`;
 }
 
-function showToast(msg){
-  const el=$('#toast'); el.textContent=msg; el.classList.remove('hidden'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.add('hidden'),2200);
+function showToast(msg,actionLabel=null,action=null){
+  const el=$('#toast');
+  undoAction=typeof action==='function'?action:null;
+  el.innerHTML=`<span>${esc(msg)}</span>${actionLabel&&undoAction?`<button id="toastAction" type="button">${esc(actionLabel)}</button>`:''}`;
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  const actionBtn=$('#toastAction');
+  if(actionBtn) actionBtn.onclick=async()=>{const fn=undoAction;undoAction=null;el.classList.add('hidden');if(fn)await fn()};
+  toastTimer=setTimeout(()=>{undoAction=null;el.classList.add('hidden')},3600);
 }
 
 function setPageTitle(title){ $('#pageTitle').textContent=title; }
@@ -634,7 +678,7 @@ function eventRow({p,date}){
     <div class="timeline-date"><strong>${esc(day)}</strong><span>${esc(mon)}</span></div>
     <div class="timeline-main"><div class="timeline-title">${esc(title)} ${badge}</div><div class="timeline-sub">${esc(a?.name||'Без счёта')}${p.frequency==='monthly'?' · ежемесячно':''}</div></div>
     <div class="timeline-money ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div>
-    <button class="event-done" data-complete-plan="${p.id}" data-complete-date="${iso}" aria-label="Провести операцию">✓</button>
+    <button class="event-done" data-complete-plan="${p.id}" data-complete-date="${iso}" aria-label="Провести операцию">${uiIcon("check")}</button>
   </div>`;
 }
 
@@ -668,7 +712,7 @@ function renderOverview(){
   const free=freeBalance();
   const monthPlan=monthRemainingSummary();
   const monthEnd=monthPlan.projected;
-  const timeline=upcomingPlans(45).slice(0,6);
+  const timeline=upcomingPlans(45).slice(0,5);
   const budgets=budgetSnapshot().slice(0,3);
   const goals=state.goals.slice(0,2);
   const forecast=forecastSeries(6);
@@ -677,60 +721,57 @@ function renderOverview(){
   const savingsRate=m.income?m.net/m.income*100:0;
   const noData=state.transactions.length===0 && state.accounts.every(a=>Number(a.openingBalance||0)===0);
   $('#main').innerHTML=`
-    <section class="hero v3-hero liquid-card">
-      <div class="hero-topline"><div class="hero-label">Общий капитал</div><span class="status-dot">● локально</span></div>
-      <div class="hero-balance">${fmt(total)}</div>
-      <div class="money-status-grid">
-        <div class="money-status primary"><small>Свободно</small><strong class="${free>=0?'positive':'negative'}">${fmt(free)}</strong><span>после резерва и обязательств</span></div>
-        <div class="money-status"><small>Зарезервировано</small><strong>${fmt(reserved)}</strong><span>${protectedMoney?`${fmt(protectedMoney)} в защищённых счетах`:reserve?`${fmt(reserve)} резерв`:'резерв не задан'}</span></div>
-        <div class="money-status"><small>Обязательства 30 дней</small><strong class="${mandatory?'negative':''}">${mandatory?`−${fmt(mandatory)}`:fmt(0)}</strong><span>только обязательные планы</span></div>
+    <section class="capital-hero">
+      <div class="capital-label">Общий капитал</div>
+      <div class="capital-value">${fmtMajor(total)}</div>
+      <div class="capital-meta">
+        <div><span>Свободно</span><strong class="${free>=0?'positive':'negative'}">${fmtMajor(free)}</strong></div>
+        <div><span>Зарезервировано</span><strong>${fmtMajor(reserved)}</strong></div>
       </div>
+      <div class="capital-footnote">${mandatory>0?`В ближайшие 30 дней обязательных платежей на ${fmtMajor(mandatory)}.`:'Обязательных платежей на ближайшие 30 дней нет.'}</div>
     </section>
 
-    <section class="month-outlook card">
-      <div class="month-outlook-main"><small>Прогноз на конец месяца</small><strong class="${monthEnd>=total?'positive':'negative'}">${fmt(monthEnd)}</strong></div>
-      <div class="month-outlook-flow"><span class="positive">+${fmt(monthPlan.income)}</span><span class="negative">−${fmt(monthPlan.expense)}</span></div>
-      <button data-tab-link="plan" class="circle-link">›</button>
+    <section class="month-outlook clean-surface">
+      <div class="month-outlook-main"><small>Прогноз конца месяца</small><strong class="${monthEnd>=total?'positive':'negative'}">${fmtMajor(monthEnd)}</strong></div>
+      <div class="month-outlook-flow"><span class="positive">+${fmtMajor(monthPlan.income)}</span><span class="negative">−${fmtMajor(monthPlan.expense)}</span></div>
+      <button data-tab-link="plan" class="circle-link" aria-label="Открыть план">${uiIcon('chevron')}</button>
     </section>
 
-    ${noData?`<section class="section"><div class="notice">Начните со своих реальных остатков: <b>Ещё → Счета и кошельки</b>. Затем приложение сможет отделять капитал от реально свободных денег.</div></section>`:''}
+    ${noData?`<section class="section"><div class="empty-inline">Добавьте остатки по счетам в <b>Ещё → Счета и кошельки</b>, чтобы расчёты стали реальными.</div></section>`:''}
 
-    <div class="fast-entry">
-      <button data-action="quick-expense"><b>−</b><span>Расход</span></button>
-      <button data-action="quick-income"><b>＋</b><span>Доход</span></button>
-      <button data-action="quick-transfer"><b>⇄</b><span>Перевод</span></button>
+    <div class="fast-entry compact-actions">
+      <button data-action="quick-expense">${uiIcon('minus')}<span>Расход</span></button>
+      <button data-action="quick-income">${uiIcon('plus')}<span>Доход</span></button>
+      <button data-action="quick-transfer">${uiIcon('transfer')}<span>Перевод</span></button>
     </div>
 
     <section class="section">
       <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
-      ${timeline.length?`<div class="timeline">${timeline.map(eventRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>План пока пуст</strong><span>Добавьте зарплату, аренду, подписки или будущую покупку.</span></div>`}
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Этот месяц</h2><span class="badge">cash flow</span></div>
-      <div class="grid-3">
-        <div class="kpi"><small>Доходы</small><strong class="positive">${fmt(m.income)}</strong></div>
-        <div class="kpi"><small>Расходы</small><strong class="negative">${fmt(m.expense)}</strong></div>
-        <div class="kpi"><small>Сбережено</small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong></div>
-      </div>
-      <div class="month-insight">${comparison.expenseDelta===null?'Когда появится история, здесь будет сравнение с прошлым месяцем.':`Расходы ${comparison.expenseDelta>0?'выше':'ниже'} прошлого месяца на <b class="${comparison.expenseDelta>0?'negative':'positive'}">${Math.abs(Math.round(comparison.expenseDelta))}%</b>.`}</div>
+      ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>План пока пуст</strong><span>Добавьте зарплату, аренду или будущую покупку.</span></div>`}
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Мои деньги</h2><button data-action="manage-accounts">Управлять</button></div>
-      <div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">защищён</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div></button>`).join('')}</div>
+      <div class="account-list list-surface">${state.accounts.map(a=>`<button class="account-item" data-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon system-glyph">${accountGlyph(a.type)}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">резерв</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmtMajor(accountBalance(a.id))}</div></button>`).join('')}</div>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Управлять</button></div>
-      ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>Лимиты не заданы</strong><span>Например: продукты 350 € в месяц.</span><button class="inline-create" data-action="add-budget">Создать бюджет</button></div>`}
+      <div class="section-head"><h2>Этот месяц</h2><button data-tab-link="stats">Подробнее</button></div>
+      <div class="month-summary-line">
+        <div><small>Доход</small><strong class="positive">${fmtMajor(m.income)}</strong></div>
+        <div><small>Расход</small><strong>${fmtMajor(m.expense)}</strong></div>
+        <div><small>Осталось</small><strong class="${m.net>=0?'positive':'negative'}">${fmtMajor(m.net)}</strong></div>
+      </div>
+      <p class="subtle-copy">${comparison.expenseDelta===null?'Сравнение появится после второго месяца данных.':`Расходы ${comparison.expenseDelta>0?'выше':'ниже'} прошлого месяца на ${Math.abs(Math.round(comparison.expenseDelta))}%. Savings rate: ${Math.round(savingsRate)}%.`}</p>
     </section>
 
-    ${goals.length?`<section class="section"><div class="section-head"><h2>Цели</h2><button data-tab-link="plan">Все цели</button></div><div class="goal-overview-list">${goals.map(goalOverviewRow).join('')}</div></section>`:''}
+    ${budgets.length?`<section class="section"><div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Все</button></div><div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div></section>`:''}
+
+    ${goals.length?`<section class="section"><div class="section-head"><h2>Цели</h2><button data-tab-link="plan">Все</button></div><div class="goal-overview-list">${goals.map(goalOverviewRow).join('')}</div></section>`:''}
 
     <section class="section">
-      <div class="section-head"><h2>Куда движутся деньги</h2><button data-tab-link="plan">Сценарии</button></div>
-      <div class="card chart-card"><div class="chart">${svgLine(forecast.series,{interactive:true})}</div><div class="grid-2 forecast-mini"><div class="kpi"><small>Через 6 месяцев</small><strong class="${forecast.series.at(-1).value>=total?'positive':'negative'}">${fmt(forecast.series.at(-1).value)}</strong></div><div class="kpi"><small>Финансовый запас</small><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong></div></div></div>
+      <div class="section-head"><h2>Прогноз капитала</h2><button data-tab-link="plan">Сценарии</button></div>
+      <div class="chart-surface"><div class="chart">${svgLine(forecast.series,{interactive:true})}</div><div class="chart-footer"><span>Через 6 месяцев <b>${fmtMajor(forecast.series.at(-1).value)}</b></span><span>Запас <b>${runway===null?'—':`${runway.toFixed(1)} мес.`}</b></span></div></div>
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
@@ -739,11 +780,11 @@ function renderOverview(){
 function accountTypeName(type){ return ({card:'Банковская карта',bank:'Банковский счёт',cash:'Наличные',savings:'Накопительный счёт',credit:'Кредитная карта',other:'Другой счёт'})[type]||'Счёт'; }
 function txRow(t){
   const a=account(t.accountId), c=category(t.categoryId), to=account(t.toAccountId);
-  const icon=t.type==='transfer'?'⇄':(c?.icon||(t.type==='income'?'＋':'−'));
+  const icon=t.type==='transfer'?uiIcon('transfer'):(c?.icon||(t.type==='income'?'＋':'−'));
   const title=t.type==='transfer'?`${a?.name||'Счёт'} → ${to?.name||'Счёт'}`:(c?.name||'Без категории');
-  const sub=[fmtDate(t.date),t.note].filter(Boolean).join(' · ');
+  const sub=[fmtDate(t.date),t.note,a?.name].filter(Boolean).join(' · ');
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
-  return `<button class="tx-item" data-tx="${t.id}" style="width:100%;color:inherit;text-align:left"><div class="tx-icon ${t.type}">${esc(icon)}</div><div class="item-main"><div class="item-title">${esc(title)}</div><div class="item-sub">${esc(sub)}</div></div><div class="item-amount ${t.type==='income'?'positive':t.type==='expense'?'negative':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}<small>${t.type==='transfer'?'перевод':esc(a?.name||'')}</small></div></button>`;
+  return `<button class="tx-item" data-tx="${t.id}" style="width:100%;color:inherit;text-align:left"><div class="tx-icon ${t.type} ${t.type==='transfer'?'system-glyph':''}">${icon}</div><div class="item-main"><div class="item-title">${esc(title)}</div><div class="item-sub">${esc(sub)}</div></div><div class="item-amount ${t.type==='income'?'positive':t.type==='expense'?'expense-amount':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</div></button>`;
 }
 
 function renderTransactions(){
@@ -762,7 +803,7 @@ function renderTransactions(){
       ${[['all','Все'],['expense','Расходы'],['income','Доходы'],['transfer','Переводы']].map(([k,n])=>`<button class="filter-chip ${txFilter===k?'active':''}" data-filter="${k}">${n}</button>`).join('')}
     </div>
     <section class="section">
-      ${txs.length?`<div class="tx-list">${txs.map(txRow).join('')}</div>`:`<div class="card empty"><div class="emoji">↕</div><strong>${txSearch?'Ничего не найдено':'Операций пока нет'}</strong><span>${txSearch?'Попробуйте другой запрос.':'Нажмите + и добавьте первый доход или расход.'}</span></div>`}
+      ${txs.length?`<div class="tx-list list-surface">${txs.map(txRow).join('')}</div>`:`<div class="empty-inline"><strong>${txSearch?'Ничего не найдено':'Операций пока нет'}</strong><span>${txSearch?'Попробуйте другой запрос.':'Нажмите + и добавьте первый доход или расход.'}</span></div>`}
     </section>`;
   $$('[data-filter]').forEach(b=>b.onclick=()=>{txFilter=b.dataset.filter;renderTransactions()});
   const search=$('#txSearchInput'); if(search)search.oninput=e=>{txSearch=e.target.value;renderTransactions();const next=$('#txSearchInput');if(next){next.focus();next.setSelectionRange(next.value.length,next.value.length)}};
@@ -816,62 +857,60 @@ function renderPlan(){
   const timeline=upcomingPlans(60).slice(0,10);
   const budgets=budgetSnapshot();
   $('#main').innerHTML=`
-    <section class="card forecast-card">
+    <section class="forecast-panel">
       <div class="section-head"><h2>Прогноз капитала</h2><span class="badge" id="forecastRangeLabel">${planForecastRange} мес.</span></div>
-      <div class="forecast-range-tabs">${[3,6,12,18].map(n=>`<button data-forecast-range="${n}" class="${planForecastRange===n?'active':''}">${n}м</button>`).join('')}</div>
-      <div class="range-control"><span>3 мес.</span><input id="forecastRangeSlider" type="range" min="3" max="18" step="1" value="${planForecastRange}"><span>18 мес.</span></div>
+      <div class="forecast-range-tabs">${[3,6,12,18].map(n=>`<button data-forecast-range="${n}" class="${planForecastRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
       <div id="forecastDynamic">${planForecastHTML()}</div>
       <div class="forecast-method"><span>Доходы: <b>${hasRecurringPlan('income')?'по плану':'средний факт'}</b></span><span>Расходы: <b>${hasRecurringPlan('expense')?'по плану':'средний факт'}</b></span></div>
-      <div class="chart-hint">Точки крупнее означают месяцы с запланированными событиями. Проводи пальцем по графику — увидишь причины изменения капитала.</div>
+      <div class="chart-hint">Зажми линию и веди пальцем по месяцам. Маркеры показывают месяцы с запланированными событиями.</div>
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
-      ${timeline.length?`<div class="timeline">${timeline.map(eventRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>Нет будущих событий</strong><span>Добавьте регулярный доход, аренду или будущую покупку.</span></div>`}
+      ${timeline.length?`<div class="timeline list-surface">${timeline.map(eventRow).join('')}</div>`:`<div class="empty-inline"><strong>Нет будущих событий</strong><span>Добавьте регулярный доход, аренду или крупную покупку.</span></div>`}
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Что если?</h2><button id="resetScenario">Сбросить</button></div>
-      <div class="card simulator-card">
-        <p class="section-note">Это песочница: меняй цифры, а прогноз выше перестроится. Реальный план не меняется.</p>
-        <div class="form-grid simulator-grid">
-          <div class="field"><label>Доход + / месяц</label><input id="simIncome" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraIncome||''}" placeholder="0 €"></div>
-          <div class="field"><label>Расход + / месяц</label><input id="simExpense" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraExpense||''}" placeholder="0 €"></div>
-          <div class="field"><label>Разовая покупка</label><input id="simOnce" type="number" min="0" step="50" inputmode="decimal" value="${planScenario.oneTimeExpense||''}" placeholder="0 €"></div>
-          <div class="field"><label id="simOnceMonthLabel">через ${planScenario.oneTimeMonth} мес.</label><input id="simOnceMonth" type="range" min="1" max="${planForecastRange}" step="1" value="${Math.min(planForecastRange,planScenario.oneTimeMonth)}"></div>
+      <div class="simulator-panel">
+        <p class="section-note">Песочница не меняет реальный план.</p>
+        <div class="scenario-grid">
+          <label><span>Доход + / месяц</span><input id="simIncome" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraIncome||''}" placeholder="0 €"></label>
+          <label><span>Расход + / месяц</span><input id="simExpense" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraExpense||''}" placeholder="0 €"></label>
+          <label><span>Разовая покупка</span><input id="simOnce" type="number" min="0" step="50" inputmode="decimal" value="${planScenario.oneTimeExpense||''}" placeholder="0 €"></label>
+          <label class="scenario-range"><span id="simOnceMonthLabel">через ${planScenario.oneTimeMonth} мес.</span><input id="simOnceMonth" type="range" min="1" max="${planForecastRange}" step="1" value="${Math.min(planForecastRange,planScenario.oneTimeMonth)}"></label>
         </div>
       </div>
     </section>
 
     <section class="section">
       <div class="section-head"><h2>До конца месяца</h2><span class="badge">${due.rows.length} событий</span></div>
-      <div class="grid-3">
-        <div class="kpi"><small>Ещё придёт</small><strong class="positive">${fmt(due.income)}</strong></div>
-        <div class="kpi"><small>Ещё уйдёт</small><strong class="negative">${fmt(due.expense)}</strong></div>
-        <div class="kpi"><small>Итоговый капитал</small><strong class="${due.projected>=0?'positive':'negative'}">${fmt(due.projected)}</strong></div>
+      <div class="month-summary-line">
+        <div><small>Придёт</small><strong class="positive">${fmtMajor(due.income)}</strong></div>
+        <div><small>Уйдёт</small><strong>${fmtMajor(due.expense)}</strong></div>
+        <div><small>Капитал</small><strong class="${due.projected>=0?'positive':'negative'}">${fmtMajor(due.projected)}</strong></div>
       </div>
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Правила плана</h2><button data-action="add-plan">Добавить</button></div>
-      ${state.plans.length?`<div class="plan-list">${[...state.plans].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(p=>planRow(p)).join('')}</div>`:`<div class="card empty"><strong>План пуст</strong><span>Добавьте зарплату, аренду, подписки и будущие крупные покупки.</span></div>`}
-      <div class="grid-2" style="margin-top:10px"><div class="kpi"><small>Доход / след. месяц</small><strong class="positive">${fmt(recurringIncome)}</strong></div><div class="kpi"><small>Расход / след. месяц</small><strong class="negative">${fmt(recurringExpense)}</strong></div></div>
+      ${state.plans.length?`<div class="plan-list list-surface">${[...state.plans].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(p=>planRow(p)).join('')}</div>`:`<div class="empty-inline"><strong>План пуст</strong><span>Добавьте зарплату, аренду, подписки и будущие покупки.</span></div>`}
+      <p class="subtle-copy">Следующий месяц: ${fmtMajor(recurringIncome)} доходов · ${fmtMajor(recurringExpense)} расходов.</p>
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Бюджеты категорий</h2><button data-action="add-budget">Добавить</button></div>
-      ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="card empty"><strong>Лимитов пока нет</strong><span>Например: продукты ≤ 350 € в месяц.</span></div>`}
+      ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="empty-inline"><strong>Лимитов пока нет</strong><span>Например: продукты ≤ 350 € в месяц.</span></div>`}
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Финансовые цели</h2><button data-action="add-goal">Добавить</button></div>
-      ${state.goals.length?`<div class="goal-list">${state.goals.map(g=>goalRow(g)).join('')}</div>`:`<div class="card empty"><strong>Целей пока нет</strong><span>Укажите сумму и желаемую дату — приложение рассчитает нужный темп накоплений.</span></div>`}
+      ${state.goals.length?`<div class="goal-list list-surface">${state.goals.map(g=>goalRow(g)).join('')}</div>`:`<div class="empty-inline"><strong>Целей пока нет</strong><span>Укажите сумму и дату — приложение рассчитает темп накоплений.</span></div>`}
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
   $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Math.min(18,Number(b.dataset.forecastRange));renderPlan()});
-  const slider=$('#forecastRangeSlider'); if(slider)slider.oninput=e=>{planForecastRange=Math.min(18,Number(e.target.value));refreshPlanForecast()};
   const simIncome=$('#simIncome'); if(simIncome)simIncome.oninput=e=>{planScenario.extraIncome=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simExpense=$('#simExpense'); if(simExpense)simExpense.oninput=e=>{planScenario.extraExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
   const simOnce=$('#simOnce'); if(simOnce)simOnce.oninput=e=>{planScenario.oneTimeExpense=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
@@ -904,29 +943,24 @@ function renderStats(){
   const overBudgets=budgets.filter(b=>b.ratio>1);
   const runway=financialRunway();
   $('#main').innerHTML=`
-    <div class="pill-tabs">${[3,6,9,12].map(n=>`<button data-range="${n}" class="${statsRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
-    <section class="section">
-      <div class="grid-2 stats-kpi-grid">
-        <div class="kpi big-kpi"><small>Расходы месяца</small><strong class="negative">${fmt(m.expense)}</strong><span>${comparison.expenseDelta===null?'нет сравнения':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}% к прошлому`}</span></div>
-        <div class="kpi big-kpi"><small>Savings rate</small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong><span>${fmt(m.net,true)} результат месяца</span></div>
-        <div class="kpi big-kpi"><small>Средний расход · 90 дней</small><strong>${fmt(avgExpense)}</strong><span>${fmt(avgExpense/30.4375)} в день</span></div>
-        <div class="kpi big-kpi"><small>Финансовый запас</small><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong><span>без новых доходов</span></div>
-      </div>
+    <div class="pill-tabs stats-period">${[3,6,9,12].map(n=>`<button data-range="${n}" class="${statsRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
+
+    <section class="stats-hero">
+      <div><small>Расходы месяца</small><strong>${fmtMajor(m.expense)}</strong><span>${comparison.expenseDelta===null?'нет сравнения':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}% к прошлому`}</span></div>
+      <div><small>Savings rate</small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong><span>${fmtMajor(m.net,true)} за месяц</span></div>
     </section>
 
-    <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">cash flow</span></div><div class="card"><div class="chart">${svgBars(monthly)}</div><div class="inline-actions"><button><span class="positive">●</span> Доходы</button><button><span class="negative">●</span> Расходы</button></div></div></section>
-    <section class="section"><div class="section-head"><h2>Капитал</h2><span class="badge">динамика</span></div><div class="card chart-card"><div class="chart">${svgLine(capital,{interactive:true})}</div></div></section>
-    <section class="section"><div class="section-head"><h2>Куда уходят деньги</h2><span class="badge">текущий месяц</span></div><div class="card">${donutHTML(cats)}</div></section>
+    <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">cash flow</span></div><div class="chart-surface"><div class="chart">${svgBars(monthly)}</div><div class="chart-legend"><span><i class="legend-income"></i>Доходы</span><span><i class="legend-expense"></i>Расходы</span></div></div></section>
+    <section class="section"><div class="section-head"><h2>Капитал</h2><span class="badge">динамика</span></div><div class="chart-surface"><div class="chart">${svgLine(capital,{interactive:true})}</div></div></section>
+    <section class="section"><div class="section-head"><h2>Куда уходят деньги</h2><span class="badge">месяц</span></div><div class="donut-surface">${donutHTML(cats)}</div></section>
 
-    <section class="section">
-      <div class="section-head"><h2>Что изменилось</h2></div>
-      <div class="card insight-list">
-        <div class="insight-row"><span>Крупнейшая категория</span><strong>${topCat?`${esc(topCat.icon)} ${esc(topCat.name)} · ${fmt(topCat.value)}`:'—'}</strong></div>
-        <div class="insight-row"><span>Доход в среднем · 90 дней</span><strong>${fmt(avgIncome)}</strong></div>
-        <div class="insight-row"><span>Расходы к прошлому месяцу</span><strong class="${comparison.expenseDelta!==null&&comparison.expenseDelta>0?'negative':'positive'}">${comparison.expenseDelta===null?'—':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}%`}</strong></div>
-        <div class="insight-row"><span>Бюджеты с перерасходом</span><strong class="${overBudgets.length?'negative':'positive'}">${overBudgets.length}</strong></div>
-      </div>
-    </section>
+    <section class="section"><div class="section-head"><h2>Показатели</h2></div><div class="insight-list list-surface">
+      <div class="insight-row"><span>Средний расход · 90 дней</span><strong>${fmtMajor(avgExpense)}</strong></div>
+      <div class="insight-row"><span>Средний доход · 90 дней</span><strong>${fmtMajor(avgIncome)}</strong></div>
+      <div class="insight-row"><span>Финансовый запас</span><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong></div>
+      <div class="insight-row"><span>Крупнейшая категория</span><strong>${topCat?`${esc(topCat.icon)} ${esc(topCat.name)} · ${fmtMajor(topCat.value)}`:'—'}</strong></div>
+      <div class="insight-row"><span>Бюджеты с перерасходом</span><strong class="${overBudgets.length?'negative':'positive'}">${overBudgets.length}</strong></div>
+    </div></section>
 
     ${budgets.length?`<section class="section"><div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Управлять</button></div><div class="budget-overview-list">${budgets.slice(0,4).map(budgetOverviewRow).join('')}</div></section>`:''}`;
   $$('[data-range]').forEach(b=>b.onclick=()=>{statsRange=Number(b.dataset.range);renderStats()});
@@ -936,23 +970,36 @@ function renderStats(){
 
 function renderMore(){
   const protectedCount=state.accounts.filter(a=>a.protected).length;
+  const backupText=state.settings.lastBackupAt?new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(state.settings.lastBackupAt)):'ещё не создавалась';
+  const rows=(items)=>`<div class="settings-list list-surface">${items.join('')}</div>`;
+  const row=(icon,title,sub,action)=>`<button class="list-button" data-action="${action}"><span class="settings-icon">${uiIcon(icon)}</span><div class="lb-main"><strong>${title}</strong><small>${sub}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`;
   $('#main').innerHTML=`
-    <section class="card">
-      <button class="list-button" data-action="manage-accounts"><span>💳</span><div class="lb-main"><strong>Счета и кошельки</strong><small>${state.accounts.length} счетов · ${protectedCount} защищённых</small></div><span class="arrow">›</span></button>
-      <button class="list-button" data-action="manage-categories"><span>🏷️</span><div class="lb-main"><strong>Категории</strong><small>Доходы и расходы</small></div><span class="arrow">›</span></button>
-      <button class="list-button" data-action="reserve"><span>🛡️</span><div class="lb-main"><strong>Дополнительный резерв</strong><small>${fmt(explicitReserve())} сверх защищённых счетов</small></div><span class="arrow">›</span></button>
-    </section>
-    <section class="section"><div class="section-head"><h2>Как считаются деньги</h2></div><div class="card definition-list">
-      <div class="definition-row"><strong>Капитал</strong><span>Сумма всех счетов и наличных.</span></div>
+    <section class="section first-section"><div class="section-head"><h2>Настройка денег</h2></div>${rows([
+      row('wallet','Счета и кошельки',`${state.accounts.length} счетов · ${protectedCount} защищённых`,'manage-accounts'),
+      row('tag','Категории','Доходы и расходы','manage-categories'),
+      row('shield','Дополнительный резерв',`${fmtMajor(explicitReserve())} сверх защищённых счетов`,'reserve')
+    ])}</section>
+
+    <section class="section"><div class="section-head"><h2>Данные</h2></div>${rows([
+      row('upload','Резервная копия',`Последняя: ${backupText}`,'export-json'),
+      row('download','Восстановить копию','Импорт JSON','import-json'),
+      row('file','Экспорт операций','CSV для Excel / Numbers','export-csv')
+    ])}</section>
+
+    <section class="section"><div class="section-head"><h2>Диагностика</h2></div><div class="diagnostics list-surface">
+      <div><span>Версия приложения</span><strong>${APP_VERSION}</strong></div>
+      <div><span>Версия данных</span><strong>${state.version||3}</strong></div>
+      <div><span>Операций</span><strong>${state.transactions.length}</strong></div>
+      <div><span>Планов</span><strong>${state.plans.length}</strong></div>
+      <div><span>Хранение</span><strong>IndexedDB · локально</strong></div>
+    </div></section>
+
+    <section class="section"><div class="section-head"><h2>Как считаются деньги</h2></div><div class="definition-list list-surface">
+      <div class="definition-row"><strong>Капитал</strong><span>Все деньги на счетах и наличными.</span></div>
       <div class="definition-row"><strong>Зарезервировано</strong><span>Защищённые счета + дополнительный резерв.</span></div>
-      <div class="definition-row"><strong>Свободно</strong><span>Капитал минус резерв и обязательные расходы ближайших 30 дней.</span></div>
+      <div class="definition-row"><strong>Свободно</strong><span>Капитал минус резерв и обязательные платежи 30 дней.</span></div>
     </div></section>
-    <section class="section"><div class="section-head"><h2>Данные</h2></div><div class="card">
-      <button class="list-button" data-action="export-json"><span>⬆️</span><div class="lb-main"><strong>Резервная копия</strong><small>Сохранить все данные в JSON</small></div><span class="arrow">›</span></button>
-      <button class="list-button" data-action="import-json"><span>⬇️</span><div class="lb-main"><strong>Восстановить копию</strong><small>Загрузить ранее сохранённый JSON</small></div><span class="arrow">›</span></button>
-      <button class="list-button" data-action="export-csv"><span>📄</span><div class="lb-main"><strong>Экспорт операций CSV</strong><small>Для Excel / Numbers</small></div><span class="arrow">›</span></button>
-    </div></section>
-    <section class="section"><div class="section-head"><h2>О приложении</h2></div><div class="card"><div class="stat-line"><span>Хранение</span><strong>Локально на устройстве</strong></div><div class="stat-line"><span>Сервер</span><strong>Не используется</strong></div><div class="stat-line"><span>Версия</span><strong>3.0</strong></div></div></section>
+
     <section class="section"><button class="danger-btn" data-action="clear-data">Удалить все мои данные</button></section>`;
   bindCommonActions();
 }
@@ -965,7 +1012,7 @@ async function completePlannedOccurrence(planId,dateISO){
     id:transactionId,
     type:p.type,
     amount:Number(p.amount)||0,
-    date:todayISO(),
+    date:dateISO||todayISO(),
     accountId:p.accountId||state.accounts[0]?.id,
     toAccountId:null,
     categoryId:p.categoryId||null,
@@ -1003,17 +1050,33 @@ function bindCommonActions(){
 }
 
 function openSheet(html){
-  $('#sheet').innerHTML=`<div class="sheet-handle"></div>${html}`;
-  $('#sheet').classList.remove('hidden'); $('#sheetBackdrop').classList.remove('hidden');
+  const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
+  sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"></div>${html}`;
+  sheet.classList.remove('hidden'); backdrop.classList.remove('hidden');
+  requestAnimationFrame(()=>{sheet.classList.add('sheet-visible');backdrop.classList.add('sheet-visible')});
   $$('.sheet-close').forEach(b=>b.onclick=closeSheet);
+  const handle=$('.sheet-handle',sheet);
+  let pointerId=null,startY=0,lastY=0;
+  const reset=()=>{sheet.style.transition='transform .36s cubic-bezier(.2,.8,.2,1)';sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',380)};
+  if(handle){
+    handle.addEventListener('pointerdown',e=>{pointerId=e.pointerId;startY=lastY=e.clientY;try{handle.setPointerCapture(e.pointerId)}catch(_){};sheet.style.transition='none'}, {passive:true});
+    handle.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;lastY=e.clientY;const dy=Math.max(0,lastY-startY);sheet.style.transform=`translateX(-50%) translateY(${dy}px)`;backdrop.style.opacity=String(Math.max(.25,1-dy/360))}, {passive:true});
+    const end=e=>{if(pointerId!==e.pointerId)return;const dy=Math.max(0,lastY-startY);pointerId=null;if(dy>95)closeSheet();else reset()};
+    handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
+  }
 }
-function closeSheet(){ $('#sheet').classList.add('hidden'); $('#sheetBackdrop').classList.add('hidden'); }
+function closeSheet(){
+  const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
+  sheet.classList.remove('sheet-visible');backdrop.classList.remove('sheet-visible');
+  sheet.style.transform='translateX(-50%) translateY(24px)';backdrop.style.opacity='0';
+  setTimeout(()=>{sheet.classList.add('hidden');backdrop.classList.add('hidden');sheet.style.transform='';backdrop.style.opacity=''},220);
+}
 
 function categoryOptions(type,selected=''){
   return state.categories.filter(c=>c.type===type).map(c=>`<option value="${c.id}" ${c.id===selected?'selected':''}>${esc(c.icon)} ${esc(c.name)}</option>`).join('');
 }
 function accountOptions(selected='',exclude=''){
-  return state.accounts.filter(a=>a.id!==exclude).map(a=>`<option value="${a.id}" ${a.id===selected?'selected':''}>${esc(a.icon)} ${esc(a.name)}</option>`).join('');
+  return state.accounts.filter(a=>a.id!==exclude).map(a=>`<option value="${a.id}" ${a.id===selected?'selected':''}>${esc(a.name)}</option>`).join('');
 }
 
 function openTransactionSheet(existing=null,initialType='expense',template=null){
@@ -1026,25 +1089,38 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
     const defaultAccount=t.accountId||state.settings.lastAccountByType?.[type]||recent?.accountId||state.accounts[0]?.id;
     const defaultCategory=t.categoryId||state.settings.lastCategoryByType?.[type]||recent?.categoryId||state.categories.find(c=>c.type===type)?.id;
     const defaultTo=t.toAccountId||recent?.toAccountId||state.accounts.find(a=>a.id!==defaultAccount)?.id||state.accounts[0]?.id;
-    openSheet(`<div class="sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':'Новая операция'}</h3><button class="sheet-close">×</button></div>
-      <div class="segmented"><button data-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-type="income" class="${type==='income'?'active':''}">Доход</button><button data-type="transfer" class="${type==='transfer'?'active':''}">Перевод</button></div>
-      <form id="txForm">
-        <div class="field"><input class="amount-input" name="amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00 €" required value="${esc(t.amount||'')}"></div>
-        <div class="form-grid">
-          ${!isTransfer?`<div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,defaultCategory)}</select></div>`:''}
-          <div class="field ${isTransfer?'':'full'}"><label>${isTransfer?'Откуда':'Счёт / способ оплаты'}</label><select name="accountId">${accountOptions(defaultAccount)}</select></div>
-          ${isTransfer?`<div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div>`:''}
-          <div class="field full"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div>
-          <div class="field full"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Например: REWE, аренда, бензин…" value="${esc(t.note||'')}"></div>
-        </div>
-        <button class="primary-btn" type="submit">${existing?'Сохранить изменения':'Добавить'}</button>
-        ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить эту операцию</button><button class="danger-btn" type="button" id="deleteTx">Удалить операцию</button>':''}
+    const cats=state.categories.filter(c=>c.type===type);
+    const quickCats=[category(defaultCategory),...cats.filter(c=>c.id!==defaultCategory)].filter(Boolean).slice(0,6);
+    const quickAccounts=[account(defaultAccount),...state.accounts.filter(a=>a.id!==defaultAccount)].filter(Boolean).slice(0,4);
+    openSheet(`<div class="sheet-head quick-sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':type==='expense'?'Новый расход':type==='income'?'Новый доход':'Перевод'}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
+      <div class="segmented tx-segmented"><button data-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-type="income" class="${type==='income'?'active':''}">Доход</button><button data-type="transfer" class="${type==='transfer'?'active':''}">Перевод</button></div>
+      <form id="txForm" class="quick-tx-form">
+        <div class="quick-amount"><input id="txAmount" class="amount-input" name="amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00" required value="${esc(t.amount||'')}"><span>€</span></div>
+        ${!isTransfer?`
+          <input type="hidden" name="categoryId" id="categoryHidden" value="${esc(defaultCategory||'')}">
+          <input type="hidden" name="accountId" id="accountHidden" value="${esc(defaultAccount||'')}">
+          <div class="quick-picker"><label>Категория</label><div class="choice-scroller">${quickCats.map(c=>`<button type="button" class="choice-chip ${c.id===defaultCategory?'active':''}" data-quick-category="${c.id}"><span>${esc(c.icon)}</span>${esc(c.name)}</button>`).join('')}</div></div>
+          <div class="quick-picker"><label>Оплата</label><div class="choice-scroller">${quickAccounts.map(a=>`<button type="button" class="choice-chip account-choice ${a.id===defaultAccount?'active':''}" data-quick-account="${a.id}">${accountGlyph(a.type)}<span>${esc(a.name)}</span></button>`).join('')}</div></div>
+          <details class="advanced-details" ${existing?'open':''}><summary>Дата, комментарий и другие варианты</summary><div class="advanced-body">
+            <div class="field"><label>Все категории</label><select id="categorySelectFull">${categoryOptions(type,defaultCategory)}</select></div>
+            <div class="field"><label>Все счета</label><select id="accountSelectFull">${accountOptions(defaultAccount)}</select></div>
+            <div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div>
+            <div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Например: REWE" value="${esc(t.note||'')}"></div>
+          </div></details>`:`
+          <div class="transfer-grid"><div class="field"><label>Откуда</label><select name="accountId">${accountOptions(defaultAccount)}</select></div><div class="transfer-arrow">${uiIcon('transfer')}</div><div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div></div>
+          <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
+        <button class="primary-btn quick-save" type="submit">${existing?'Сохранить':type==='expense'?'Добавить расход':type==='income'?'Добавить доход':'Перевести'}</button>
+        ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить</button><button class="danger-btn" type="button" id="deleteTx">Удалить</button>':''}
       </form>`);
     $$('[data-type]').forEach(b=>b.onclick=()=>{type=b.dataset.type;build()});
+    $$('[data-quick-category]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickCategory;$('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#categorySelectFull');if(sel)sel.value=id});
+    $$('[data-quick-account]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickAccount;$('#accountHidden').value=id;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#accountSelectFull');if(sel)sel.value=id});
+    const catSel=$('#categorySelectFull');if(catSel)catSel.onchange=e=>{$('#categoryHidden').value=e.target.value;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===e.target.value))};
+    const accSel=$('#accountSelectFull');if(accSel)accSel.onchange=e=>{$('#accountHidden').value=e.target.value;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x.dataset.quickAccount===e.target.value))};
     $('#txForm').onsubmit=async e=>{
       e.preventDefault(); const fd=new FormData(e.currentTarget); const amount=Number(fd.get('amount'));
-      if(!amount||amount<=0)return;
-      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date'),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),note:String(fd.get('note')||'').trim(),createdAt:existing?.createdAt||Date.now()};
+      if(!amount||amount<=0){showToast('Введите сумму больше нуля');return}
+      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),note:String(fd.get('note')||'').trim(),createdAt:existing?.createdAt||Date.now()};
       if(type==='transfer' && obj.accountId===obj.toAccountId){showToast('Выберите разные счета');return}
       if(existing) state.transactions=state.transactions.map(x=>x.id===existing.id?obj:x); else state.transactions.push(obj);
       state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[type]:obj.accountId};
@@ -1052,7 +1128,12 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       await persist();closeSheet();render();showToast(existing?'Операция обновлена':'Операция добавлена');
     };
     const repeat=$('#repeatTx'); if(repeat)repeat.onclick=()=>openTransactionSheet(null,existing.type,existing);
-    const del=$('#deleteTx'); if(del)del.onclick=async()=>{if(confirm('Удалить эту операцию?')){state.transactions=state.transactions.filter(x=>x.id!==existing.id);state.planCompletions=state.planCompletions.filter(x=>x.transactionId!==existing.id);await persist();closeSheet();render();showToast('Операция удалена')}};
+    const del=$('#deleteTx'); if(del)del.onclick=async()=>{
+      const removed={...existing}; const removedCompletions=state.planCompletions.filter(x=>x.transactionId===existing.id);
+      state.transactions=state.transactions.filter(x=>x.id!==existing.id);state.planCompletions=state.planCompletions.filter(x=>x.transactionId!==existing.id);
+      await persist();closeSheet();render();showToast('Операция удалена','Отменить',async()=>{state.transactions.push(removed);state.planCompletions.push(...removedCompletions);await persist();render();showToast('Удаление отменено')});
+    };
+    if(!existing&&!template) setTimeout(()=>$('#txAmount')?.focus(),180);
   }; build();
 }
 
@@ -1091,12 +1172,17 @@ function openPlanSheet(existing=null){
       if(existing)state.plans=state.plans.map(x=>x.id===existing.id?obj:x);else state.plans.push(obj);
       await persist();closeSheet();render();showToast('План сохранён');
     };
-    const del=$('#deletePlan');if(del)del.onclick=async()=>{if(confirm('Удалить эту плановую операцию?')){state.plans=state.plans.filter(x=>x.id!==existing.id);await persist();closeSheet();render()}};
+    const del=$('#deletePlan');if(del)del.onclick=async()=>{
+      const removed={...existing};
+      state.plans=state.plans.filter(x=>x.id!==existing.id);
+      await persist();closeSheet();render();
+      showToast('План удалён','Отменить',async()=>{state.plans.push(removed);await persist();render();showToast('Удаление отменено')});
+    };
   };build();
 }
 
 function openAccountsManager(){
-  openSheet(`<div class="sheet-head"><h3>Счета и кошельки</h3><button class="sheet-close">×</button></div><div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-edit-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">защищён</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div><span class="chevron">›</span></button>`).join('')}</div><button class="primary-btn" id="newAccount" style="margin-top:14px">Добавить счёт</button>`);
+  openSheet(`<div class="sheet-head"><h3>Счета и кошельки</h3><button class="sheet-close">×</button></div><div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-edit-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon system-glyph">${accountGlyph(a.type)}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">защищён</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div><span class="chevron">›</span></button>`).join('')}</div><button class="primary-btn" id="newAccount" style="margin-top:14px">Добавить счёт</button>`);
   $$('[data-edit-account]').forEach(b=>b.onclick=()=>openAccountSheet(account(b.dataset.editAccount)));
   $('#newAccount').onclick=()=>openAccountSheet();
 }
@@ -1104,14 +1190,23 @@ function openAccountsManager(){
 function openAccountSheet(existing=null){
   const a=existing||{};
   openSheet(`<div class="sheet-head"><h3>${existing?'Изменить счёт':'Новый счёт'}</h3><button class="sheet-close">×</button></div><form id="accountForm"><div class="form-grid">
-    <div class="field"><label>Иконка</label><select name="icon">${['💳','🏦','💶','💰','🪙','📱','🧾'].map(i=>`<option ${i===(a.icon||'💳')?'selected':''}>${i}</option>`).join('')}</select></div>
-    <div class="field"><label>Тип</label><select name="type">${[['card','Карта'],['bank','Банковский счёт'],['cash','Наличные'],['savings','Накопительный'],['credit','Кредитная карта'],['other','Другой']].map(([v,n])=>`<option value="${v}" ${v===(a.type||'card')?'selected':''}>${n}</option>`).join('')}</select></div>
+    <div class="field full"><label>Тип</label><select name="type">${[['card','Карта'],['bank','Банковский счёт'],['cash','Наличные'],['savings','Накопительный'],['credit','Кредитная карта'],['other','Другой']].map(([v,n])=>`<option value="${v}" ${v===(a.type||'card')?'selected':''}>${n}</option>`).join('')}</select></div>
     <div class="field full"><label>Название</label><input name="name" required maxlength="40" placeholder="Например: Revolut" value="${esc(a.name||'')}"></div>
     <div class="field full"><label>Начальный остаток</label><input name="openingBalance" type="number" step="0.01" inputmode="decimal" value="${esc(a.openingBalance??0)}"></div>
-    <label class="switch-row full"><input name="protected" type="checkbox" ${a.protected?'checked':''}><span><strong>Защищённые накопления</strong><small>Баланс этого счёта не считается свободными деньгами для обычных трат</small></span></label>
-  </div><div class="notice">Начальный остаток — сумма на счёте до первой внесённой в приложение операции. Позже баланс меняется автоматически.</div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button class="danger-btn" type="button" id="deleteAccount">Удалить счёт</button>':''}</form>`);
-  $('#accountForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:fd.get('icon'),openingBalance:Number(fd.get('openingBalance')||0),protected:fd.get('protected')==='on'};if(existing)state.accounts=state.accounts.map(x=>x.id===existing.id?obj:x);else state.accounts.push(obj);await persist();closeSheet();render();showToast('Счёт сохранён')};
-  const del=$('#deleteAccount');if(del)del.onclick=async()=>{const used=state.transactions.some(t=>t.accountId===existing.id||t.toAccountId===existing.id)||state.plans.some(p=>p.accountId===existing.id);if(used){showToast('Счёт используется в операциях или планах');return}if(state.accounts.length<=1){showToast('Нужен хотя бы один счёт');return}if(confirm('Удалить этот счёт?')){state.accounts=state.accounts.filter(x=>x.id!==existing.id);await persist();closeSheet();render()}};
+    <label class="switch-row full"><input name="protected" type="checkbox" ${a.protected?'checked':''}><span><strong>Защищённые накопления</strong><small>Баланс этого счёта остаётся в капитале, но не считается свободными деньгами.</small></span></label>
+  </div><div class="notice">Иконка счёта теперь определяется автоматически по типу, чтобы интерфейс оставался единым.</div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button class="danger-btn" type="button" id="deleteAccount">Удалить счёт</button>':''}</form>`);
+  $('#accountForm').onsubmit=async e=>{
+    e.preventDefault();const fd=new FormData(e.currentTarget);
+    const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:existing?.icon||'💳',openingBalance:Number(fd.get('openingBalance')||0),protected:fd.get('protected')==='on'};
+    if(existing)state.accounts=state.accounts.map(x=>x.id===existing.id?obj:x);else state.accounts.push(obj);
+    await persist();closeSheet();render();showToast('Счёт сохранён')
+  };
+  const del=$('#deleteAccount');if(del)del.onclick=async()=>{
+    const used=state.transactions.some(t=>t.accountId===existing.id||t.toAccountId===existing.id)||state.plans.some(p=>p.accountId===existing.id);
+    if(used){showToast('Счёт используется в операциях или планах');return}
+    if(state.accounts.length<=1){showToast('Нужен хотя бы один счёт');return}
+    if(confirm('Удалить этот счёт?')){state.accounts=state.accounts.filter(x=>x.id!==existing.id);await persist();closeSheet();render()}
+  };
 }
 
 function openCategoriesManager(){
@@ -1149,7 +1244,9 @@ function openReserveSheet(){
 function downloadBlob(blob,name){
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-function exportJSON(){
+async function exportJSON(){
+  state.settings.lastBackupAt=Date.now();
+  await persist();
   const stamp=todayISO(); downloadBlob(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),`money-backup-${stamp}.json`);showToast('Резервная копия создана');
 }
 function exportCSV(){
@@ -1166,11 +1263,34 @@ async function handleImport(file){
   try{const text=await file.text();const parsed=JSON.parse(text);if(!parsed || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.transactions))throw new Error('bad');if(!confirm('Заменить текущие данные содержимым резервной копии?'))return;state=normalizeState(parsed);await persist();render();showToast('Резервная копия восстановлена')}catch(e){showToast('Не удалось прочитать файл резервной копии')}
 }
 
+function openQuickAddMenu(){
+  openSheet(`<div class="sheet-head"><h3>Добавить</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
+    <div class="quick-add-grid">
+      <button type="button" data-add-kind="expense"><span>${uiIcon('minus')}</span><strong>Расход</strong><small>Покупка или платёж</small></button>
+      <button type="button" data-add-kind="income"><span>${uiIcon('plus')}</span><strong>Доход</strong><small>Зарплата или поступление</small></button>
+      <button type="button" data-add-kind="transfer"><span>${uiIcon('transfer')}</span><strong>Перевод</strong><small>Между своими счетами</small></button>
+      <button type="button" data-add-kind="plan"><span>${uiIcon('calendar')}</span><strong>План</strong><small>Будущая операция</small></button>
+    </div>`);
+  $$('[data-add-kind]').forEach(b=>b.onclick=()=>{
+    const kind=b.dataset.addKind;
+    if(kind==='plan') openPlanSheet();
+    else openTransactionSheet(null,kind);
+  });
+}
+
 function bindShell(){
   $$('.nav-item').forEach(b=>b.onclick=()=>{activeTab=b.dataset.tab;render()});
-  $('#fab').onclick=()=>openTransactionSheet();
+  const fab=$('#fab');
+  if(fab){
+    let holdTimer=null,held=false;
+    fab.addEventListener('pointerdown',()=>{held=false;holdTimer=setTimeout(()=>{held=true;openQuickAddMenu()},520)});
+    const cancelHold=()=>{if(holdTimer){clearTimeout(holdTimer);holdTimer=null}};
+    fab.addEventListener('pointerup',()=>{cancelHold();if(!held)openTransactionSheet(null,'expense')});
+    fab.addEventListener('pointercancel',cancelHold);
+    fab.addEventListener('pointerleave',cancelHold);
+  }
   $('#sheetBackdrop').onclick=closeSheet;
-  $('#privacyToggle').onclick=async()=>{state.settings.privacy=!state.settings.privacy;$('#privacyIcon').textContent=state.settings.privacy?'◌':'◉';await persist();render()};
+  $('#privacyToggle').onclick=async()=>{state.settings.privacy=!state.settings.privacy;$('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye');await persist();render()};
   $('#importInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)handleImport(f);e.target.value=''})
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
   document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
@@ -1187,8 +1307,8 @@ async function init(){
   const saved=await dbGet().catch(()=>null); state=normalizeState(saved||defaultState()); if(!saved)await persist();
   planForecastRange=Math.min(18,Math.max(3,planForecastRange));
   const now=new Date(); $('#todayLabel').textContent=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(now);
-  $('#privacyIcon').textContent=state.settings.privacy?'◌':'◉'; bindShell(); render();
-  if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js').catch(()=>{}));}
+  $('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye'); bindShell(); render();
+  if('serviceWorker' in navigator){window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('./service-worker.js');await reg.update();if(reg.waiting)showToast('Доступна новая версия','Обновить',()=>{reg.waiting.postMessage({type:'SKIP_WAITING'});location.reload()});reg.addEventListener('updatefound',()=>{const w=reg.installing;if(w)w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showToast('Доступна новая версия','Обновить',()=>location.reload())})})}catch(_){}});}
 }
 
 init();

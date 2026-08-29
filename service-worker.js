@@ -1,4 +1,4 @@
-const CACHE = 'money-pwa-v3.0.0';
+const CACHE = 'money-pwa-v3.1.0';
 const ASSETS = [
   './',
   './index.html',
@@ -40,4 +40,8 @@ self.addEventListener('fetch', event => {
       throw error;
     }
   })());
+});
+
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });

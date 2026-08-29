@@ -1617,3 +1617,170 @@ body > .bottom-nav{
   transform-origin:center top;
   isolation:auto!important;
 }
+
+
+/* =========================================================
+   V4.5 — Stable Glass Dock
+   ========================================================= */
+body > .bottom-nav{
+  background:
+    linear-gradient(180deg,rgba(33,42,60,.965),rgba(18,24,36,.972))!important;
+  border:1px solid rgba(202,216,255,.16)!important;
+  box-shadow:
+    0 20px 48px rgba(0,0,0,.38),
+    0 2px 7px rgba(0,0,0,.22),
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 -1px 0 rgba(0,0,0,.18)!important;
+}
+
+body > .bottom-nav::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:1px 1px auto 1px;
+  height:48%;
+  border-radius:28px 28px 45% 45%;
+  pointer-events:none;
+  background:
+    radial-gradient(70% 100% at 50% 0,rgba(151,177,236,.115),transparent 72%),
+    linear-gradient(180deg,rgba(255,255,255,.055),transparent);
+}
+body > .bottom-nav::after{
+  content:"";
+  position:absolute;
+  z-index:0;
+  left:12%;
+  right:12%;
+  bottom:-10px;
+  height:24px;
+  border-radius:999px;
+  pointer-events:none;
+  background:radial-gradient(ellipse at center,rgba(62,100,196,.18),transparent 68%);
+  filter:blur(10px);
+  opacity:.78;
+}
+
+body > .bottom-nav .nav-item{
+  overflow:hidden!important;
+}
+body > .bottom-nav .nav-item::before{
+  content:"";
+  position:absolute;
+  z-index:-1;
+  inset:4px 3px;
+  border-radius:18px;
+  background:
+    radial-gradient(circle at 50% 0,rgba(155,185,255,.20),transparent 70%),
+    linear-gradient(180deg,rgba(135,170,255,.08),rgba(100,135,220,.035));
+  border:1px solid rgba(180,203,255,.08);
+  opacity:0;
+  transform:scale(.92);
+  transition:
+    opacity var(--motion-normal) ease,
+    transform var(--motion-normal) cubic-bezier(.16,.78,.24,1);
+}
+body > .bottom-nav .nav-item.active::before{
+  opacity:1;
+  transform:scale(1);
+}
+body > .bottom-nav .nav-item.active .nav-icon{
+  filter:drop-shadow(0 3px 8px rgba(104,148,255,.28));
+}
+body > .bottom-nav .nav-item.active small{
+  text-shadow:0 2px 8px rgba(95,135,235,.24);
+}
+
+body > .bottom-nav #fab,
+body > .bottom-nav .nav-add{
+  border:1px solid rgba(255,255,255,.34)!important;
+  border-radius:22px!important;
+  background:
+    radial-gradient(circle at 30% 12%,rgba(255,255,255,.42),transparent 27%),
+    radial-gradient(circle at 70% 88%,rgba(57,86,179,.25),transparent 50%),
+    linear-gradient(145deg,color-mix(in srgb,var(--accent) 94%,#fff),color-mix(in srgb,var(--accent) 75%,#3459bb))!important;
+  box-shadow:
+    0 10px 28px rgba(74,115,225,.34),
+    0 2px 8px rgba(0,0,0,.22),
+    inset 0 1px 0 rgba(255,255,255,.44),
+    inset 0 -1px 0 rgba(24,47,110,.20)!important;
+}
+body > .bottom-nav #fab::before{
+  content:"";
+  position:absolute;
+  inset:3px;
+  border-radius:19px;
+  pointer-events:none;
+  border:1px solid rgba(255,255,255,.10);
+}
+body > .bottom-nav #fab::after{
+  content:"";
+  position:absolute;
+  width:30px;
+  height:10px;
+  left:50%;
+  bottom:-8px;
+  transform:translateX(-50%);
+  border-radius:50%;
+  background:rgba(70,110,220,.28);
+  filter:blur(7px);
+  z-index:-1;
+  pointer-events:none;
+}
+body > .bottom-nav #fab.is-pressed,
+body > .bottom-nav #fab:active{
+  transform:scale(.92) translateY(1px)!important;
+  box-shadow:
+    0 6px 18px rgba(74,115,225,.27),
+    0 1px 5px rgba(0,0,0,.18),
+    inset 0 1px 0 rgba(255,255,255,.34)!important;
+}
+
+@media (min-width:425px) and (max-width:455px) and (orientation:portrait){
+  body > .bottom-nav{
+    width:428px!important;
+    height:86px!important;
+    min-height:86px!important;
+    padding:8px 9px!important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) 74px minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)!important;
+  }
+  body > .bottom-nav #fab,
+  body > .bottom-nav .nav-add{
+    width:62px!important;
+    min-width:62px!important;
+    max-width:62px!important;
+    height:62px!important;
+    min-height:62px!important;
+    max-height:62px!important;
+    border-radius:23px!important;
+  }
+  body > .bottom-nav #fab::before{border-radius:20px}
+  body > .bottom-nav #fab span{font-size:40px!important}
+}
+
+.app-version-card{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin:8px 0 16px;
+  padding:13px 14px;
+  border:1px solid var(--line-soft);
+  border-radius:18px;
+  background:
+    radial-gradient(circle at 0 0,rgba(126,167,255,.10),transparent 48%),
+    rgba(255,255,255,.025);
+}
+.app-version-icon{
+  width:38px;
+  height:38px;
+  flex:0 0 auto;
+  border-radius:13px;
+  display:grid;
+  place-items:center;
+  color:#aebfe8;
+  background:rgba(126,167,255,.09);
+  border:1px solid rgba(155,183,244,.08);
+}
+.app-version-icon .ui-icon{width:19px;height:19px}
+.app-version-card small{display:block;color:var(--muted);font-size:8px}
+.app-version-card strong{display:block;margin-top:1px;font-size:15px;letter-spacing:-.02em}
+.app-version-card span{display:block;margin-top:2px;color:var(--subtle);font-size:8px}

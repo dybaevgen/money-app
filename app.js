@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.4.0';
+const APP_VERSION = '4.5.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -1615,6 +1615,14 @@ function renderMore(){
   const row=(icon,title,sub,action,badge='')=>`<button class="list-button" data-action="${action}"><span class="settings-icon">${uiIcon(icon)}</span><div class="lb-main"><strong>${title}</strong><small>${sub}</small></div>${badge?`<span class="settings-badge">${badge}</span>`:''}<span class="arrow">${uiIcon('chevron')}</span></button>`;
   const att=attentionItems();
   $('#main').innerHTML=`
+    <section class="app-version-card">
+      <div class="app-version-icon">${uiIcon('sparkles')}</div>
+      <div>
+        <small>Money App</small>
+        <strong>V${APP_VERSION}</strong>
+        <span>Текущая установленная версия</span>
+      </div>
+    </section>
     <section class="section first-section"><div class="section-head"><h2>Основные</h2></div>${rows([
       row('wallet','Счета и кошельки',`${state.accounts.length} счетов · ${protectedCount} защищённых`,'manage-accounts'),
       row('tag','Категории','Доходы и расходы','manage-categories'),

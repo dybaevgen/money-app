@@ -17,11 +17,11 @@ const todayISO = () => {
 const esc = (s='') => String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
 const defaultState = () => ({
-  version: 2,
-  settings: { currency:'EUR', reserve:0, privacy:false },
+  version: 3,
+  settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{} },
   accounts: [
-    { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳' },
-    { id:'acc-cash', name:'Наличные', type:'cash', openingBalance:0, icon:'💶' }
+    { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
+    { id:'acc-cash', name:'Наличные', type:'cash', openingBalance:0, icon:'💶', protected:false }
   ],
   categories: [
     {id:'exp-food',type:'expense',name:'Продукты',icon:'🛒',preset:true},
@@ -48,6 +48,7 @@ const defaultState = () => ({
   ],
   transactions: [],
   plans: [],
+  planCompletions: [],
   budgets: [],
   goals: []
 });
@@ -55,6 +56,7 @@ const defaultState = () => ({
 let state = defaultState();
 let activeTab = 'overview';
 let txFilter = 'all';
+let txSearch = '';
 let statsRange = 6;
 let planForecastRange = 12;
 let planScenario = { extraIncome:0, extraExpense:0, oneTimeExpense:0, oneTimeMonth:3 };
@@ -101,18 +103,25 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:2,
-    settings:{...d.settings,...(s.settings||{})},
-    accounts:Array.isArray(s.accounts)?s.accounts:d.accounts,
+    version:3,
+    settings:{
+      ...d.settings,
+      ...(s.settings||{}),
+      lastAccountByType:{...(d.settings.lastAccountByType||{}),...((s.settings||{}).lastAccountByType||{})},
+      lastCategoryByType:{...(d.settings.lastCategoryByType||{}),...((s.settings||{}).lastCategoryByType||{})}
+    },
+    accounts:(Array.isArray(s.accounts)?s.accounts:d.accounts).map(a=>({...a,protected:Boolean(a.protected)})),
     categories:Array.isArray(s.categories)?s.categories:d.categories,
     transactions:Array.isArray(s.transactions)?s.transactions:[],
     plans:Array.isArray(s.plans)?s.plans.map(p=>({
       ...p,
       frequency:p.frequency==='monthly'?'monthly':'once',
-      endDate:p.endDate||''
+      endDate:p.endDate||'',
+      required:p.type==='expense' ? (p.required!==false) : false
     })):[],
+    planCompletions:Array.isArray(s.planCompletions)?s.planCompletions:[],
     budgets:Array.isArray(s.budgets)?s.budgets:[],
-    goals:Array.isArray(s.goals)?s.goals:[]
+    goals:Array.isArray(s.goals)?s.goals.map(g=>({...g,targetDate:g.targetDate||''})):[]
   };
 }
 
@@ -160,6 +169,18 @@ function accountBalance(id){
   return bal;
 }
 function totalBalance(){ return state.accounts.reduce((s,a)=>s+accountBalance(a.id),0); }
+function protectedBalance(){ return state.accounts.filter(a=>a.protected).reduce((s,a)=>s+Math.max(0,accountBalance(a.id)),0); }
+function explicitReserve(){ return Math.max(0,Number(state.settings.reserve)||0); }
+function reservedBalance(){ return protectedBalance()+explicitReserve(); }
+function occurrenceKey(planId,date){ return `${planId}|${typeof date==='string'?date:toISODate(date)}`; }
+function isOccurrenceCompleted(planId,date){
+  const key=occurrenceKey(planId,date);
+  return state.planCompletions.some(x=>occurrenceKey(x.planId,x.date)===key);
+}
+function completionFor(planId,date){
+  const key=occurrenceKey(planId,date);
+  return state.planCompletions.find(x=>occurrenceKey(x.planId,x.date)===key)||null;
+}
 
 function monthTotals(key=monthKey()){
   let income=0, expense=0;
@@ -199,8 +220,10 @@ function occurrenceInMonth(plan, monthDate){
 
 function recurringPlanMonthly(type, monthDate=new Date()){
   return state.plans
-    .filter(p=>p.type===type && p.frequency==='monthly' && occurrenceInMonth(p,monthDate))
-    .reduce((sum,p)=>sum+Number(p.amount||0),0);
+    .filter(p=>p.type===type && p.frequency==='monthly')
+    .map(p=>({p,date:occurrenceInMonth(p,monthDate)}))
+    .filter(x=>x.date && !isOccurrenceCompleted(x.p.id,x.date))
+    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
 }
 
 function hasRecurringPlan(type){
@@ -209,8 +232,20 @@ function hasRecurringPlan(type){
 
 function oncePlansForMonth(type, monthDate){
   return state.plans
-    .filter(p=>p.type===type && p.frequency==='once' && occurrenceInMonth(p,monthDate))
-    .reduce((sum,p)=>sum+Number(p.amount||0),0);
+    .filter(p=>p.type===type && p.frequency==='once')
+    .map(p=>({p,date:occurrenceInMonth(p,monthDate)}))
+    .filter(x=>x.date && !isOccurrenceCompleted(x.p.id,x.date))
+    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+}
+
+function planItemsForMonth(monthDate){
+  const items=[];
+  for(const p of state.plans){
+    const date=occurrenceInMonth(p,monthDate);
+    if(!date || isOccurrenceCompleted(p.id,date)) continue;
+    items.push({p,date});
+  }
+  return items.sort((a,b)=>a.date-b.date);
 }
 
 function forecastSeries(months=12, scenario={}){
@@ -236,12 +271,21 @@ function forecastSeries(months=12, scenario={}){
     const simulatedOnce=i===oneTimeMonth?oneTimeExpense:0;
     const income=recurringIncome+onceIncome+extraIncome;
     const expense=recurringExpense+onceExpense+extraExpense+simulatedOnce;
+    const events=planItemsForMonth(d).map(({p,date})=>({
+      id:p.id,
+      date:toISODate(date),
+      title:p.title||planCategory(p)?.name||'План',
+      type:p.type,
+      amount:Number(p.amount)||0,
+      required:Boolean(p.required)
+    }));
+    if(simulatedOnce>0) events.push({id:'scenario',date:'',title:'Сценарий: разовая трата',type:'expense',amount:simulatedOnce,required:false});
     balance+=income-expense;
     totalIncome+=income; totalExpense+=expense;
     series.push({
       label:monthLabel(d),
       tooltipLabel:new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(d),
-      value:balance,income,expense
+      value:balance,income,expense,events
     });
   }
   return {
@@ -283,29 +327,29 @@ function nextOccurrence(plan, from=new Date()){
   const start=planStart(plan);
   const end=planEnd(plan);
   const f=new Date(from); f.setHours(0,0,0,0);
-  if(plan.frequency==='once') return start>=f && (!end || start<=end) ? start : null;
+  if(plan.frequency==='once') return start>=f && (!end || start<=end) && !isOccurrenceCompleted(plan.id,start) ? start : null;
   for(let i=0;i<=72;i++){
     const md=addMonths(f,i);
     const occ=occurrenceInMonth(plan,md);
-    if(occ && occ>=f) return occ;
+    if(occ && occ>=f && !isOccurrenceCompleted(plan.id,occ)) return occ;
     if(end && new Date(md.getFullYear(),md.getMonth(),1,12)>end) break;
   }
   return null;
 }
 
-function planOccurrencesBetween(start,end){
+function planOccurrencesBetween(start,end,{includeCompleted=false}={}){
   const out=[];
   for(const p of state.plans){
     if(p.frequency==='once'){
       const d=planStart(p);
-      if(d>=start && d<=end) out.push({p,date:d});
+      if(d>=start && d<=end && (includeCompleted || !isOccurrenceCompleted(p.id,d))) out.push({p,date:d,completed:isOccurrenceCompleted(p.id,d)});
       continue;
     }
     let cursor=new Date(start.getFullYear(),start.getMonth(),1,12);
     const stop=new Date(end.getFullYear(),end.getMonth(),1,12);
     while(cursor<=stop){
       const d=occurrenceInMonth(p,cursor);
-      if(d && d>=start && d<=end) out.push({p,date:d});
+      if(d && d>=start && d<=end && (includeCompleted || !isOccurrenceCompleted(p.id,d))) out.push({p,date:d,completed:isOccurrenceCompleted(p.id,d)});
       cursor=addMonths(cursor,1);
     }
   }
@@ -330,11 +374,18 @@ function monthRemainingSummary(){
   return {rows,income,expense,projected:totalBalance()+income-expense};
 }
 
-function upcomingExpenses(days=30){
-  return upcomingPlans(days).filter(x=>x.p.type==='expense').reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+function upcomingExpenses(days=30,{requiredOnly=false}={}){
+  return upcomingPlans(days)
+    .filter(x=>x.p.type==='expense' && (!requiredOnly || x.p.required))
+    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
 }
-
-function freeBalance(){ return totalBalance()-Number(state.settings.reserve||0)-upcomingExpenses(30); }
+function mandatoryExpenses(days=30){ return upcomingExpenses(days,{requiredOnly:true}); }
+function mandatoryFreeImpact(days=30){
+  return upcomingPlans(days)
+    .filter(x=>x.p.type==='expense' && x.p.required && !account(x.p.accountId)?.protected)
+    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+}
+function freeBalance(){ return totalBalance()-reservedBalance()-mandatoryFreeImpact(30); }
 
 function expenseByCategory(key=monthKey()){
   const map={};
@@ -349,6 +400,46 @@ function monthlySeries(count=6){
     out.push({label:monthLabel(d),income:t.income,expense:t.expense,key});
   }
   return out;
+}
+
+function budgetSnapshot(key=monthKey()){
+  const spentMap={};
+  state.transactions.filter(t=>t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
+    spentMap[t.categoryId]=(spentMap[t.categoryId]||0)+Number(t.amount||0);
+  });
+  return state.budgets.map(b=>{
+    const spent=spentMap[b.categoryId]||0;
+    const limit=Math.max(0,Number(b.limit)||0);
+    return {...b,spent,limit,remaining:limit-spent,ratio:limit?spent/limit:0,category:category(b.categoryId)};
+  }).sort((a,b)=>b.ratio-a.ratio);
+}
+
+function monthsUntil(dateISO){
+  if(!dateISO)return null;
+  const d=parseISO(dateISO), now=new Date();
+  const months=(d.getFullYear()-now.getFullYear())*12+(d.getMonth()-now.getMonth());
+  return Math.max(1,months+(d.getDate()>=now.getDate()?0:0));
+}
+function goalMonthlyNeed(goal){
+  const remain=Math.max(0,Number(goal.target||0)-Number(goal.saved||0));
+  const months=monthsUntil(goal.targetDate);
+  return months?remain/months:null;
+}
+function savingsRateSeries(count=6){
+  return monthlySeries(count).map(x=>({label:x.label,value:x.income?((x.income-x.expense)/x.income*100):0,income:x.income,expense:x.expense}));
+}
+function previousMonthKey(){ return monthKey(addMonths(new Date(),-1)); }
+function monthComparison(){
+  const cur=monthTotals(), prev=monthTotals(previousMonthKey());
+  return {
+    current:cur,previous:prev,
+    expenseDelta:prev.expense?((cur.expense-prev.expense)/prev.expense*100):null,
+    incomeDelta:prev.income?((cur.income-prev.income)/prev.income*100):null
+  };
+}
+function financialRunway(){
+  const avg=actualAverage('expense');
+  return avg>0?Math.max(0,(totalBalance()-reservedBalance())/avg):null;
 }
 
 function capitalMonthlySeries(count=6){
@@ -399,7 +490,7 @@ function svgLine(data,{interactive=false,height='normal'}={}){
   const stride=Math.max(1,Math.ceil((data.length-1)/5));
   const labels=pts.map((q,i)=>((i===0||i===pts.length-1||i%stride===0)&&q.label)?`<text class="chart-label" x="${q.x}" y="${h-8}" text-anchor="middle">${esc(q.label)}</text>`:'').join('');
   const zero=min<0&&max>0?`<line class="chart-zero" x1="${pl}" y1="${yFor(0)}" x2="${w-pr}" y2="${yFor(0)}"/>`:'';
-  const dots=pts.map(q=>`<circle class="chart-dot" cx="${q.x}" cy="${q.y}" r="2.8"></circle>`).join('');
+  const dots=pts.map(q=>`<circle class="${q.events?.length?'chart-dot chart-event-dot':'chart-dot'}" cx="${q.x}" cy="${q.y}" r="${q.events?.length?4.2:2.8}"></circle>`).join('');
   return `<div class="chart-shell ${interactive?'interactive-chart':''} chart-${height}" data-chart-id="${id}">
     <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="График">
       <defs><linearGradient id="areaGrad-${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8cff" stop-opacity=".30"/><stop offset="1" stop-color="#5b8cff" stop-opacity="0"/></linearGradient></defs>
@@ -460,7 +551,8 @@ function bindInteractiveCharts(){
       const y=pt+(max-(Number(d.value)||0))/(max-min)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
-      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}`;
+      const eventText=Array.isArray(d.events)&&d.events.length?`<em>${d.events.slice(0,2).map(x=>`${esc(x.title)} ${fmt(x.type==='income'?x.amount:-x.amount,true)}`).join('<br>')}${d.events.length>2?`<br>+ ещё ${d.events.length-2}`:''}</em>`:'';
+      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}${eventText}`;
       const pct=x/vb.width*100; tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
     el.addEventListener('pointerdown',e=>{
@@ -532,56 +624,113 @@ function render(){
   if(activeTab==='more') renderMore();
 }
 
+function eventRow({p,date}){
+  const c=planCategory(p), a=account(p.accountId), iso=toISODate(date);
+  const day=new Intl.DateTimeFormat('ru-RU',{day:'2-digit'}).format(date);
+  const mon=new Intl.DateTimeFormat('ru-RU',{month:'short'}).format(date).replace('.','');
+  const title=p.title||c?.name||'Плановая операция';
+  const badge=p.type==='expense'&&p.required?'<span class="event-badge required">обяз.</span>':p.type==='income'?'<span class="event-badge income">доход</span>':'<span class="event-badge">план</span>';
+  return `<div class="timeline-item">
+    <div class="timeline-date"><strong>${esc(day)}</strong><span>${esc(mon)}</span></div>
+    <div class="timeline-main"><div class="timeline-title">${esc(title)} ${badge}</div><div class="timeline-sub">${esc(a?.name||'Без счёта')}${p.frequency==='monthly'?' · ежемесячно':''}</div></div>
+    <div class="timeline-money ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div>
+    <button class="event-done" data-complete-plan="${p.id}" data-complete-date="${iso}" aria-label="Провести операцию">✓</button>
+  </div>`;
+}
+
+function budgetOverviewRow(b){
+  const pct=Math.max(0,Math.min(140,b.ratio*100));
+  const cls=b.ratio>=1?'over':b.ratio>=.8?'warn':'';
+  return `<button class="budget-overview" data-budget="${b.id}" style="width:100%;color:inherit;text-align:left">
+    <div class="budget-top"><span>${esc(b.category?.icon||'•')} ${esc(b.category?.name||'Категория')}</span><strong class="${cls==='over'?'negative':''}">${fmt(b.spent)} / ${fmt(b.limit)}</strong></div>
+    <div class="budget-track"><i class="${cls}" style="width:${Math.min(100,pct)}%"></i></div>
+    <div class="budget-bottom"><span>${b.remaining>=0?`Осталось ${fmt(b.remaining)}`:`Перерасход ${fmt(Math.abs(b.remaining))}`}</span><span>${Math.round(b.ratio*100)}%</span></div>
+  </button>`;
+}
+
+function goalOverviewRow(g){
+  const target=Math.max(0,Number(g.target)||0), saved=Math.max(0,Number(g.saved)||0), ratio=target?saved/target:0;
+  const need=goalMonthlyNeed(g);
+  return `<button class="goal-overview" data-goal="${g.id}" style="width:100%;color:inherit;text-align:left">
+    <div class="goal-overview-top"><div><strong>${esc(g.title)}</strong><small>${g.targetDate?`до ${fmtDate(g.targetDate)}`:'без даты'}</small></div><span>${Math.round(Math.min(1,ratio)*100)}%</span></div>
+    <div class="goal-progress"><i style="width:${Math.min(100,ratio*100)}%"></i></div>
+    <div class="goal-overview-bottom"><span>${fmt(saved)} из ${fmt(target)}</span><span>${need!==null&&saved<target?`${fmt(need)} / мес.`:'цель достигнута'}</span></div>
+  </button>`;
+}
+
 function renderOverview(){
   const m=monthTotals();
   const total=totalBalance();
+  const protectedMoney=protectedBalance();
+  const reserve=explicitReserve();
+  const reserved=reservedBalance();
+  const mandatory=mandatoryExpenses(30);
   const free=freeBalance();
-  const forecast=forecastSeries(6);
   const monthPlan=monthRemainingSummary();
-  const upcoming=monthPlan.rows.slice(0,5);
+  const monthEnd=monthPlan.projected;
+  const timeline=upcomingPlans(45).slice(0,6);
+  const budgets=budgetSnapshot().slice(0,3);
+  const goals=state.goals.slice(0,2);
+  const forecast=forecastSeries(6);
+  const runway=financialRunway();
+  const comparison=monthComparison();
+  const savingsRate=m.income?m.net/m.income*100:0;
   const noData=state.transactions.length===0 && state.accounts.every(a=>Number(a.openingBalance||0)===0);
-  const runway=actualAverage('expense')>0?Math.max(0,totalBalance()/actualAverage('expense')):null;
   $('#main').innerHTML=`
-    <section class="hero liquid-card">
+    <section class="hero v3-hero liquid-card">
       <div class="hero-topline"><div class="hero-label">Общий капитал</div><span class="status-dot">● локально</span></div>
       <div class="hero-balance">${fmt(total)}</div>
-      <div class="hero-row hero-row-3">
-        <div class="mini-stat"><small>Свободно</small><strong class="${free>=0?'positive':'negative'}">${fmt(free)}</strong></div>
-        <div class="mini-stat"><small>До конца месяца</small><strong class="${monthPlan.expense>0?'negative':''}">${monthPlan.expense?`−${fmt(monthPlan.expense)}`:fmt(0)}</strong></div>
-        <div class="mini-stat"><small>После платежей</small><strong class="${monthPlan.projected>=0?'positive':'negative'}">${fmt(monthPlan.projected)}</strong></div>
+      <div class="money-status-grid">
+        <div class="money-status primary"><small>Свободно</small><strong class="${free>=0?'positive':'negative'}">${fmt(free)}</strong><span>после резерва и обязательств</span></div>
+        <div class="money-status"><small>Зарезервировано</small><strong>${fmt(reserved)}</strong><span>${protectedMoney?`${fmt(protectedMoney)} в защищённых счетах`:reserve?`${fmt(reserve)} резерв`:'резерв не задан'}</span></div>
+        <div class="money-status"><small>Обязательства 30 дней</small><strong class="${mandatory?'negative':''}">${mandatory?`−${fmt(mandatory)}`:fmt(0)}</strong><span>только обязательные планы</span></div>
       </div>
     </section>
-    ${monthPlan.rows.length?`<section class="month-due glass-strip">
-      <div><small>Осталось в этом месяце</small><strong>${monthPlan.rows.length} ${monthPlan.rows.length===1?'платёж':'операций'}</strong></div>
-      <div class="month-due-money"><span class="positive">+${fmt(monthPlan.income)}</span><span class="negative">−${fmt(monthPlan.expense)}</span></div>
-      <button data-tab-link="plan">›</button>
-    </section>`:''}
-    ${noData?`<section class="section"><div class="notice">Начните со своих реальных остатков: <b>Ещё → Счета и кошельки</b>. Затем расходы и доходы будут автоматически менять баланс каждого счёта.</div></section>`:''}
-    <div class="quick-actions">
-      <button class="quick-action" data-action="quick-expense"><span>−</span><small>Расход</small></button>
-      <button class="quick-action" data-action="quick-income"><span>＋</span><small>Доход</small></button>
-      <button class="quick-action" data-action="quick-transfer"><span>⇄</span><small>Перевод</small></button>
-      <button class="quick-action" data-action="quick-plan"><span>⌚︎</span><small>План</small></button>
+
+    <section class="month-outlook card">
+      <div class="month-outlook-main"><small>Прогноз на конец месяца</small><strong class="${monthEnd>=total?'positive':'negative'}">${fmt(monthEnd)}</strong></div>
+      <div class="month-outlook-flow"><span class="positive">+${fmt(monthPlan.income)}</span><span class="negative">−${fmt(monthPlan.expense)}</span></div>
+      <button data-tab-link="plan" class="circle-link">›</button>
+    </section>
+
+    ${noData?`<section class="section"><div class="notice">Начните со своих реальных остатков: <b>Ещё → Счета и кошельки</b>. Затем приложение сможет отделять капитал от реально свободных денег.</div></section>`:''}
+
+    <div class="fast-entry">
+      <button data-action="quick-expense"><b>−</b><span>Расход</span></button>
+      <button data-action="quick-income"><b>＋</b><span>Доход</span></button>
+      <button data-action="quick-transfer"><b>⇄</b><span>Перевод</span></button>
     </div>
+
     <section class="section">
-      <div class="section-head"><h2>Этот месяц</h2></div>
+      <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
+      ${timeline.length?`<div class="timeline">${timeline.map(eventRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>План пока пуст</strong><span>Добавьте зарплату, аренду, подписки или будущую покупку.</span></div>`}
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Этот месяц</h2><span class="badge">cash flow</span></div>
       <div class="grid-3">
         <div class="kpi"><small>Доходы</small><strong class="positive">${fmt(m.income)}</strong></div>
         <div class="kpi"><small>Расходы</small><strong class="negative">${fmt(m.expense)}</strong></div>
-        <div class="kpi"><small>Сбережено</small><strong>${m.income?Math.round(m.net/m.income*100):0}%</strong></div>
+        <div class="kpi"><small>Сбережено</small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong></div>
       </div>
+      <div class="month-insight">${comparison.expenseDelta===null?'Когда появится история, здесь будет сравнение с прошлым месяцем.':`Расходы ${comparison.expenseDelta>0?'выше':'ниже'} прошлого месяца на <b class="${comparison.expenseDelta>0?'negative':'positive'}">${Math.abs(Math.round(comparison.expenseDelta))}%</b>.`}</div>
     </section>
+
     <section class="section">
       <div class="section-head"><h2>Мои деньги</h2><button data-action="manage-accounts">Управлять</button></div>
-      <div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div></button>`).join('')}</div>
+      <div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">защищён</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div></button>`).join('')}</div>
     </section>
+
     <section class="section">
-      <div class="section-head"><h2>Прогноз капитала</h2><button data-tab-link="plan">Открыть план</button></div>
+      <div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Управлять</button></div>
+      ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>Лимиты не заданы</strong><span>Например: продукты 350 € в месяц.</span><button class="inline-create" data-action="add-budget">Создать бюджет</button></div>`}
+    </section>
+
+    ${goals.length?`<section class="section"><div class="section-head"><h2>Цели</h2><button data-tab-link="plan">Все цели</button></div><div class="goal-overview-list">${goals.map(goalOverviewRow).join('')}</div></section>`:''}
+
+    <section class="section">
+      <div class="section-head"><h2>Куда движутся деньги</h2><button data-tab-link="plan">Сценарии</button></div>
       <div class="card chart-card"><div class="chart">${svgLine(forecast.series,{interactive:true})}</div><div class="grid-2 forecast-mini"><div class="kpi"><small>Через 6 месяцев</small><strong class="${forecast.series.at(-1).value>=total?'positive':'negative'}">${fmt(forecast.series.at(-1).value)}</strong></div><div class="kpi"><small>Финансовый запас</small><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong></div></div></div>
-    </section>
-    <section class="section">
-      <div class="section-head"><h2>Платежи до конца месяца</h2><button data-action="add-plan">Добавить</button></div>
-      ${upcoming.length?`<div class="plan-list">${upcoming.map(({p,date})=>planRow(p,date)).join('')}</div>`:`<div class="card empty"><div class="emoji">◷</div><strong>До конца месяца ничего не запланировано</strong><span>Добавьте аренду, зарплату, подписки или будущие покупки.</span></div>`}
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
@@ -600,22 +749,33 @@ function txRow(t){
 function renderTransactions(){
   let txs=[...state.transactions].sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.createdAt||0)-(a.createdAt||0));
   if(txFilter!=='all') txs=txs.filter(t=>t.type===txFilter);
+  if(txSearch.trim()){
+    const q=txSearch.trim().toLowerCase();
+    txs=txs.filter(t=>{
+      const hay=[t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||'')].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
   $('#main').innerHTML=`
+    <div class="tx-search"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></svg><input id="txSearchInput" type="search" placeholder="Поиск: REWE, продукты, карта…" value="${esc(txSearch)}"></div>
     <div class="filter-row">
       ${[['all','Все'],['expense','Расходы'],['income','Доходы'],['transfer','Переводы']].map(([k,n])=>`<button class="filter-chip ${txFilter===k?'active':''}" data-filter="${k}">${n}</button>`).join('')}
     </div>
     <section class="section">
-      ${txs.length?`<div class="tx-list">${txs.map(txRow).join('')}</div>`:`<div class="card empty"><div class="emoji">↕</div><strong>Операций пока нет</strong><span>Нажмите + и добавьте первый доход или расход.</span></div>`}
+      ${txs.length?`<div class="tx-list">${txs.map(txRow).join('')}</div>`:`<div class="card empty"><div class="emoji">↕</div><strong>${txSearch?'Ничего не найдено':'Операций пока нет'}</strong><span>${txSearch?'Попробуйте другой запрос.':'Нажмите + и добавьте первый доход или расход.'}</span></div>`}
     </section>`;
   $$('[data-filter]').forEach(b=>b.onclick=()=>{txFilter=b.dataset.filter;renderTransactions()});
+  const search=$('#txSearchInput'); if(search)search.oninput=e=>{txSearch=e.target.value;renderTransactions();const next=$('#txSearchInput');if(next){next.focus();next.setSelectionRange(next.value.length,next.value.length)}};
   $$('[data-tx]').forEach(b=>b.onclick=()=>openTransactionSheet(state.transactions.find(t=>t.id===b.dataset.tx)));
 }
 
 function planRow(p,date=null){
   const c=planCategory(p), a=account(p.accountId); const d=date||nextOccurrence(p,new Date());
   const repeat=p.frequency==='monthly'?(p.endDate?`каждый месяц · до ${fmtDate(p.endDate)}`:'каждый месяц · без окончания'):'один раз';
-  const when=d?fmtDate(toISODate(d)):(p.frequency==='monthly'&&p.endDate?'завершено':fmtDate(p.date));
-  return `<button class="plan-item" data-plan="${p.id}" style="width:100%;color:inherit;text-align:left"><div class="plan-icon">${esc(c?.icon||(p.type==='income'?'＋':'−'))}</div><div class="item-main"><div class="item-title">${esc(p.title||c?.name||'План')}</div><div class="item-sub">${esc(when)} · ${esc(repeat)}${a?` · ${esc(a.name)}`:''}</div></div><div class="item-amount ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div></button>`;
+  const onceDone=p.frequency==='once'&&isOccurrenceCompleted(p.id,planStart(p));
+  const when=onceDone?'проведено':d?fmtDate(toISODate(d)):(p.frequency==='monthly'&&p.endDate?'завершено':fmtDate(p.date));
+  const req=p.type==='expense'&&p.required?' · обязательный':'';
+  return `<button class="plan-item" data-plan="${p.id}" style="width:100%;color:inherit;text-align:left"><div class="plan-icon">${esc(c?.icon||(p.type==='income'?'＋':'−'))}</div><div class="item-main"><div class="item-title">${esc(p.title||c?.name||'План')}</div><div class="item-sub">${esc(when)} · ${esc(repeat)}${req}${a?` · ${esc(a.name)}`:''}</div></div><div class="item-amount ${p.type==='income'?'positive':'negative'}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</div></button>`;
 }
 function toISODate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
@@ -653,6 +813,8 @@ function renderPlan(){
   const recurringIncome=hasRecurringPlan('income')?recurringPlanMonthly('income',nextMonth):actualAverage('income');
   const recurringExpense=hasRecurringPlan('expense')?recurringPlanMonthly('expense',nextMonth):actualAverage('expense');
   const due=monthRemainingSummary();
+  const timeline=upcomingPlans(60).slice(0,10);
+  const budgets=budgetSnapshot();
   $('#main').innerHTML=`
     <section class="card forecast-card">
       <div class="section-head"><h2>Прогноз капитала</h2><span class="badge" id="forecastRangeLabel">${planForecastRange} мес.</span></div>
@@ -660,48 +822,54 @@ function renderPlan(){
       <div class="range-control"><span>3 мес.</span><input id="forecastRangeSlider" type="range" min="3" max="18" step="1" value="${planForecastRange}"><span>18 мес.</span></div>
       <div id="forecastDynamic">${planForecastHTML()}</div>
       <div class="forecast-method"><span>Доходы: <b>${hasRecurringPlan('income')?'по плану':'средний факт'}</b></span><span>Расходы: <b>${hasRecurringPlan('expense')?'по плану':'средний факт'}</b></span></div>
+      <div class="chart-hint">Точки крупнее означают месяцы с запланированными событиями. Проводи пальцем по графику — увидишь причины изменения капитала.</div>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Симулятор</h2><button id="resetScenario">Сбросить</button></div>
+      <div class="section-head"><h2>Ближайшие события</h2><button data-action="add-plan">Добавить</button></div>
+      ${timeline.length?`<div class="timeline">${timeline.map(eventRow).join('')}</div>`:`<div class="card empty compact-empty"><strong>Нет будущих событий</strong><span>Добавьте регулярный доход, аренду или будущую покупку.</span></div>`}
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Что если?</h2><button id="resetScenario">Сбросить</button></div>
       <div class="card simulator-card">
-        <p class="section-note">Меняй цифры — график выше перестраивается. Эти значения не сохраняются в реальный план.</p>
+        <p class="section-note">Это песочница: меняй цифры, а прогноз выше перестроится. Реальный план не меняется.</p>
         <div class="form-grid simulator-grid">
-          <div class="field"><label>Доп. доход / месяц</label><input id="simIncome" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraIncome||''}" placeholder="0 €"></div>
-          <div class="field"><label>Доп. расход / месяц</label><input id="simExpense" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraExpense||''}" placeholder="0 €"></div>
-          <div class="field"><label>Разовая трата</label><input id="simOnce" type="number" min="0" step="50" inputmode="decimal" value="${planScenario.oneTimeExpense||''}" placeholder="0 €"></div>
+          <div class="field"><label>Доход + / месяц</label><input id="simIncome" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraIncome||''}" placeholder="0 €"></div>
+          <div class="field"><label>Расход + / месяц</label><input id="simExpense" type="number" min="0" step="25" inputmode="decimal" value="${planScenario.extraExpense||''}" placeholder="0 €"></div>
+          <div class="field"><label>Разовая покупка</label><input id="simOnce" type="number" min="0" step="50" inputmode="decimal" value="${planScenario.oneTimeExpense||''}" placeholder="0 €"></div>
           <div class="field"><label id="simOnceMonthLabel">через ${planScenario.oneTimeMonth} мес.</label><input id="simOnceMonth" type="range" min="1" max="${planForecastRange}" step="1" value="${Math.min(planForecastRange,planScenario.oneTimeMonth)}"></div>
         </div>
       </div>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>До конца месяца</h2><span class="badge">${due.rows.length} операций</span></div>
+      <div class="section-head"><h2>До конца месяца</h2><span class="badge">${due.rows.length} событий</span></div>
       <div class="grid-3">
-        <div class="kpi"><small>Придёт</small><strong class="positive">${fmt(due.income)}</strong></div>
-        <div class="kpi"><small>Спишется</small><strong class="negative">${fmt(due.expense)}</strong></div>
-        <div class="kpi"><small>Останется</small><strong class="${due.projected>=0?'positive':'negative'}">${fmt(due.projected)}</strong></div>
+        <div class="kpi"><small>Ещё придёт</small><strong class="positive">${fmt(due.income)}</strong></div>
+        <div class="kpi"><small>Ещё уйдёт</small><strong class="negative">${fmt(due.expense)}</strong></div>
+        <div class="kpi"><small>Итоговый капитал</small><strong class="${due.projected>=0?'positive':'negative'}">${fmt(due.projected)}</strong></div>
       </div>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Регулярные и будущие операции</h2><button data-action="add-plan">Добавить</button></div>
-      ${state.plans.length?`<div class="plan-list">${[...state.plans].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(p=>planRow(p)).join('')}</div>`:`<div class="card empty"><div class="emoji">📅</div><strong>План пуст</strong><span>Добавьте зарплату, аренду, подписки и будущие крупные покупки.</span></div>`}
+      <div class="section-head"><h2>Правила плана</h2><button data-action="add-plan">Добавить</button></div>
+      ${state.plans.length?`<div class="plan-list">${[...state.plans].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(p=>planRow(p)).join('')}</div>`:`<div class="card empty"><strong>План пуст</strong><span>Добавьте зарплату, аренду, подписки и будущие крупные покупки.</span></div>`}
       <div class="grid-2" style="margin-top:10px"><div class="kpi"><small>Доход / след. месяц</small><strong class="positive">${fmt(recurringIncome)}</strong></div><div class="kpi"><small>Расход / след. месяц</small><strong class="negative">${fmt(recurringExpense)}</strong></div></div>
     </section>
+
     <section class="section">
       <div class="section-head"><h2>Бюджеты категорий</h2><button data-action="add-budget">Добавить</button></div>
-      ${state.budgets.length?`<div class="budget-list">${state.budgets.map(b=>budgetRow(b)).join('')}</div>`:`<div class="card empty"><strong>Лимитов пока нет</strong><span>Например: продукты ≤ 350 € в месяц.</span></div>`}
+      ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="card empty"><strong>Лимитов пока нет</strong><span>Например: продукты ≤ 350 € в месяц.</span></div>`}
     </section>
+
     <section class="section">
       <div class="section-head"><h2>Финансовые цели</h2><button data-action="add-goal">Добавить</button></div>
-      ${state.goals.length?`<div class="goal-list">${state.goals.map(g=>goalRow(g)).join('')}</div>`:`<div class="card empty"><strong>Целей пока нет</strong><span>Например: резерв 5 000 € или поездка 1 200 €.</span></div>`}
+      ${state.goals.length?`<div class="goal-list">${state.goals.map(g=>goalRow(g)).join('')}</div>`:`<div class="card empty"><strong>Целей пока нет</strong><span>Укажите сумму и желаемую дату — приложение рассчитает нужный темп накоплений.</span></div>`}
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
-  $$('[data-budget]').forEach(b=>b.onclick=()=>openBudgetSheet(state.budgets.find(x=>x.id===b.dataset.budget)));
-  $$('[data-goal]').forEach(b=>b.onclick=()=>openGoalSheet(state.goals.find(x=>x.id===b.dataset.goal)));
   $$('[data-forecast-range]').forEach(b=>b.onclick=()=>{planForecastRange=Math.min(18,Number(b.dataset.forecastRange));renderPlan()});
   const slider=$('#forecastRangeSlider'); if(slider)slider.oninput=e=>{planForecastRange=Math.min(18,Number(e.target.value));refreshPlanForecast()};
   const simIncome=$('#simIncome'); if(simIncome)simIncome.oninput=e=>{planScenario.extraIncome=Math.max(0,Number(e.target.value)||0);refreshPlanForecast()};
@@ -716,45 +884,100 @@ function budgetRow(b){
   return `<button class="budget-item" data-budget="${b.id}" style="width:100%;color:inherit;text-align:left"><div class="item-main"><div class="item-title">${esc(c?.icon||'•')} ${esc(c?.name||'Категория')}</div><div class="item-sub">${fmt(spent)} из ${fmt(limit)}</div><div class="progress ${pct>100?'danger':''}"><i style="width:${Math.min(100,pct)}%"></i></div></div><div class="item-amount ${pct>100?'negative':''}">${Math.round(pct)}%</div></button>`;
 }
 function goalRow(g){
-  const target=Number(g.target)||0,saved=Number(g.saved)||0,pct=target?saved/target*100:0;
-  return `<button class="goal-item" data-goal="${g.id}" style="width:100%;color:inherit;text-align:left"><div class="item-main"><div class="item-title">🎯 ${esc(g.title)}</div><div class="item-sub">${fmt(saved)} из ${fmt(target)}</div><div class="progress"><i style="width:${Math.min(100,pct)}%"></i></div></div><div class="item-amount">${Math.round(pct)}%</div></button>`;
+  const target=Number(g.target)||0,saved=Number(g.saved)||0,pct=target?saved/target*100:0, need=goalMonthlyNeed(g);
+  const sub=[`${fmt(saved)} из ${fmt(target)}`,g.targetDate?`до ${fmtDate(g.targetDate)}`:'',need!==null&&saved<target?`${fmt(need)} / мес.`:''].filter(Boolean).join(' · ');
+  return `<button class="goal-item" data-goal="${g.id}" style="width:100%;color:inherit;text-align:left"><div class="item-main"><div class="item-title">🎯 ${esc(g.title)}</div><div class="item-sub">${sub}</div><div class="progress"><i style="width:${Math.min(100,pct)}%"></i></div></div><div class="item-amount">${Math.round(pct)}%</div></button>`;
 }
 
 function renderStats(){
   chartRegistry.clear();
-  const m=monthTotals(); const cats=expenseByCategory(); const monthly=monthlySeries(statsRange); const capital=capitalMonthlySeries(statsRange); const prevKey=monthKey(addMonths(new Date(),-1)); const prev=monthTotals(prevKey); const diff=prev.expense?((m.expense-prev.expense)/prev.expense*100):0;
+  const m=monthTotals();
+  const cats=expenseByCategory();
+  const monthly=monthlySeries(statsRange);
+  const capital=capitalMonthlySeries(statsRange);
+  const comparison=monthComparison();
+  const savingsRate=m.income?m.net/m.income*100:0;
+  const avgExpense=actualAverage('expense');
+  const avgIncome=actualAverage('income');
+  const topCat=cats[0];
+  const budgets=budgetSnapshot();
+  const overBudgets=budgets.filter(b=>b.ratio>1);
+  const runway=financialRunway();
   $('#main').innerHTML=`
     <div class="pill-tabs">${[3,6,9,12].map(n=>`<button data-range="${n}" class="${statsRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
     <section class="section">
-      <div class="grid-3">
-        <div class="kpi"><small>Доходы месяца</small><strong class="positive">${fmt(m.income)}</strong></div>
-        <div class="kpi"><small>Расходы месяца</small><strong class="negative">${fmt(m.expense)}</strong></div>
-        <div class="kpi"><small>К прошлому месяцу</small><strong class="${diff<=0?'positive':'negative'}">${prev.expense?`${diff>0?'+':''}${Math.round(diff)}%`:'—'}</strong></div>
+      <div class="grid-2 stats-kpi-grid">
+        <div class="kpi big-kpi"><small>Расходы месяца</small><strong class="negative">${fmt(m.expense)}</strong><span>${comparison.expenseDelta===null?'нет сравнения':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}% к прошлому`}</span></div>
+        <div class="kpi big-kpi"><small>Savings rate</small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong><span>${fmt(m.net,true)} результат месяца</span></div>
+        <div class="kpi big-kpi"><small>Средний расход · 90 дней</small><strong>${fmt(avgExpense)}</strong><span>${fmt(avgExpense/30.4375)} в день</span></div>
+        <div class="kpi big-kpi"><small>Финансовый запас</small><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong><span>без новых доходов</span></div>
       </div>
     </section>
-    <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">месяцы</span></div><div class="card"><div class="chart">${svgBars(monthly)}</div><div class="inline-actions"><button><span class="positive">●</span> Доходы</button><button><span class="negative">●</span> Расходы</button></div></div></section>
+
+    <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">cash flow</span></div><div class="card"><div class="chart">${svgBars(monthly)}</div><div class="inline-actions"><button><span class="positive">●</span> Доходы</button><button><span class="negative">●</span> Расходы</button></div></div></section>
     <section class="section"><div class="section-head"><h2>Капитал</h2><span class="badge">динамика</span></div><div class="card chart-card"><div class="chart">${svgLine(capital,{interactive:true})}</div></div></section>
-    <section class="section"><div class="section-head"><h2>Расходы по категориям</h2><span class="badge">текущий месяц</span></div><div class="card">${donutHTML(cats)}</div></section>
-    <section class="section"><div class="section-head"><h2>Ключевые показатели</h2></div><div class="card"><div class="stat-line"><span>Средний расход / месяц · 90 дней</span><strong>${fmt(actualAverage('expense'))}</strong></div><div class="stat-line"><span>Средний доход / месяц · 90 дней</span><strong>${fmt(actualAverage('income'))}</strong></div><div class="stat-line"><span>Средний расход / день</span><strong>${fmt(actualAverage('expense')/30.4375)}</strong></div><div class="stat-line"><span>Savings rate этого месяца</span><strong>${m.income?Math.round(m.net/m.income*100):0}%</strong></div></div></section>`;
+    <section class="section"><div class="section-head"><h2>Куда уходят деньги</h2><span class="badge">текущий месяц</span></div><div class="card">${donutHTML(cats)}</div></section>
+
+    <section class="section">
+      <div class="section-head"><h2>Что изменилось</h2></div>
+      <div class="card insight-list">
+        <div class="insight-row"><span>Крупнейшая категория</span><strong>${topCat?`${esc(topCat.icon)} ${esc(topCat.name)} · ${fmt(topCat.value)}`:'—'}</strong></div>
+        <div class="insight-row"><span>Доход в среднем · 90 дней</span><strong>${fmt(avgIncome)}</strong></div>
+        <div class="insight-row"><span>Расходы к прошлому месяцу</span><strong class="${comparison.expenseDelta!==null&&comparison.expenseDelta>0?'negative':'positive'}">${comparison.expenseDelta===null?'—':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}%`}</strong></div>
+        <div class="insight-row"><span>Бюджеты с перерасходом</span><strong class="${overBudgets.length?'negative':'positive'}">${overBudgets.length}</strong></div>
+      </div>
+    </section>
+
+    ${budgets.length?`<section class="section"><div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Управлять</button></div><div class="budget-overview-list">${budgets.slice(0,4).map(budgetOverviewRow).join('')}</div></section>`:''}`;
   $$('[data-range]').forEach(b=>b.onclick=()=>{statsRange=Number(b.dataset.range);renderStats()});
+  bindCommonActions();
   bindInteractiveCharts();
 }
 
 function renderMore(){
+  const protectedCount=state.accounts.filter(a=>a.protected).length;
   $('#main').innerHTML=`
     <section class="card">
-      <button class="list-button" data-action="manage-accounts"><span>💳</span><div class="lb-main"><strong>Счета и кошельки</strong><small>${state.accounts.length} · карты, счета, наличные</small></div><span class="arrow">›</span></button>
+      <button class="list-button" data-action="manage-accounts"><span>💳</span><div class="lb-main"><strong>Счета и кошельки</strong><small>${state.accounts.length} счетов · ${protectedCount} защищённых</small></div><span class="arrow">›</span></button>
       <button class="list-button" data-action="manage-categories"><span>🏷️</span><div class="lb-main"><strong>Категории</strong><small>Доходы и расходы</small></div><span class="arrow">›</span></button>
-      <button class="list-button" data-action="reserve"><span>🛡️</span><div class="lb-main"><strong>Неприкосновенный резерв</strong><small>Сейчас ${fmt(Number(state.settings.reserve||0))}</small></div><span class="arrow">›</span></button>
+      <button class="list-button" data-action="reserve"><span>🛡️</span><div class="lb-main"><strong>Дополнительный резерв</strong><small>${fmt(explicitReserve())} сверх защищённых счетов</small></div><span class="arrow">›</span></button>
     </section>
+    <section class="section"><div class="section-head"><h2>Как считаются деньги</h2></div><div class="card definition-list">
+      <div class="definition-row"><strong>Капитал</strong><span>Сумма всех счетов и наличных.</span></div>
+      <div class="definition-row"><strong>Зарезервировано</strong><span>Защищённые счета + дополнительный резерв.</span></div>
+      <div class="definition-row"><strong>Свободно</strong><span>Капитал минус резерв и обязательные расходы ближайших 30 дней.</span></div>
+    </div></section>
     <section class="section"><div class="section-head"><h2>Данные</h2></div><div class="card">
       <button class="list-button" data-action="export-json"><span>⬆️</span><div class="lb-main"><strong>Резервная копия</strong><small>Сохранить все данные в JSON</small></div><span class="arrow">›</span></button>
       <button class="list-button" data-action="import-json"><span>⬇️</span><div class="lb-main"><strong>Восстановить копию</strong><small>Загрузить ранее сохранённый JSON</small></div><span class="arrow">›</span></button>
       <button class="list-button" data-action="export-csv"><span>📄</span><div class="lb-main"><strong>Экспорт операций CSV</strong><small>Для Excel / Numbers</small></div><span class="arrow">›</span></button>
     </div></section>
-    <section class="section"><div class="section-head"><h2>О приложении</h2></div><div class="card"><div class="stat-line"><span>Хранение</span><strong>Локально на устройстве</strong></div><div class="stat-line"><span>Сервер</span><strong>Не используется</strong></div><div class="stat-line"><span>Версия</span><strong>2.0</strong></div></div></section>
+    <section class="section"><div class="section-head"><h2>О приложении</h2></div><div class="card"><div class="stat-line"><span>Хранение</span><strong>Локально на устройстве</strong></div><div class="stat-line"><span>Сервер</span><strong>Не используется</strong></div><div class="stat-line"><span>Версия</span><strong>3.0</strong></div></div></section>
     <section class="section"><button class="danger-btn" data-action="clear-data">Удалить все мои данные</button></section>`;
   bindCommonActions();
+}
+
+async function completePlannedOccurrence(planId,dateISO){
+  const p=state.plans.find(x=>x.id===planId);
+  if(!p || isOccurrenceCompleted(planId,dateISO))return;
+  const transactionId=uid();
+  state.transactions.push({
+    id:transactionId,
+    type:p.type,
+    amount:Number(p.amount)||0,
+    date:todayISO(),
+    accountId:p.accountId||state.accounts[0]?.id,
+    toAccountId:null,
+    categoryId:p.categoryId||null,
+    note:`По плану: ${p.title||planCategory(p)?.name||'операция'}`,
+    createdAt:Date.now()
+  });
+  state.planCompletions.push({planId,date:dateISO,transactionId,completedAt:Date.now()});
+  state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[p.type]:p.accountId||state.accounts[0]?.id};
+  if(p.categoryId)state.settings.lastCategoryByType={...(state.settings.lastCategoryByType||{}),[p.type]:p.categoryId};
+  await persist();
+  render();
+  showToast('Плановая операция проведена');
 }
 
 function bindCommonActions(){
@@ -769,6 +992,9 @@ function bindCommonActions(){
   $$('[data-tab-link]').forEach(b=>b.onclick=()=>{activeTab=b.dataset.tabLink;render()});
   $$('[data-account]').forEach(b=>b.onclick=()=>openAccountSheet(account(b.dataset.account)));
   $$('[data-plan]').forEach(b=>b.onclick=()=>openPlanSheet(state.plans.find(p=>p.id===b.dataset.plan)));
+  $$('[data-complete-plan]').forEach(b=>b.onclick=e=>{e.stopPropagation();completePlannedOccurrence(b.dataset.completePlan,b.dataset.completeDate)});
+  $$('[data-budget]').forEach(b=>b.onclick=()=>openBudgetSheet(state.budgets.find(x=>x.id===b.dataset.budget)));
+  $$('[data-goal]').forEach(b=>b.onclick=()=>openGoalSheet(state.goals.find(x=>x.id===b.dataset.goal)));
   const reserve=$('[data-action="reserve"]'); if(reserve)reserve.onclick=openReserveSheet;
   const exj=$('[data-action="export-json"]'); if(exj)exj.onclick=exportJSON;
   const imj=$('[data-action="import-json"]'); if(imj)imj.onclick=()=>$('#importInput').click();
@@ -790,24 +1016,29 @@ function accountOptions(selected='',exclude=''){
   return state.accounts.filter(a=>a.id!==exclude).map(a=>`<option value="${a.id}" ${a.id===selected?'selected':''}>${esc(a.icon)} ${esc(a.name)}</option>`).join('');
 }
 
-function openTransactionSheet(existing=null,initialType='expense'){
+function openTransactionSheet(existing=null,initialType='expense',template=null){
   if(!state.accounts.length){showToast('Сначала добавьте хотя бы один счёт');openAccountsManager();return}
-  let type=existing?.type||initialType;
+  let type=existing?.type||template?.type||initialType;
   const build=()=>{
-    const t=existing||{}; const isTransfer=type==='transfer';
-    openSheet(`<div class="sheet-head"><h3>${existing?'Изменить операцию':'Новая операция'}</h3><button class="sheet-close">×</button></div>
+    const recent=[...state.transactions].filter(x=>x.type===type).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
+    const t=existing||template||{};
+    const isTransfer=type==='transfer';
+    const defaultAccount=t.accountId||state.settings.lastAccountByType?.[type]||recent?.accountId||state.accounts[0]?.id;
+    const defaultCategory=t.categoryId||state.settings.lastCategoryByType?.[type]||recent?.categoryId||state.categories.find(c=>c.type===type)?.id;
+    const defaultTo=t.toAccountId||recent?.toAccountId||state.accounts.find(a=>a.id!==defaultAccount)?.id||state.accounts[0]?.id;
+    openSheet(`<div class="sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':'Новая операция'}</h3><button class="sheet-close">×</button></div>
       <div class="segmented"><button data-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-type="income" class="${type==='income'?'active':''}">Доход</button><button data-type="transfer" class="${type==='transfer'?'active':''}">Перевод</button></div>
       <form id="txForm">
         <div class="field"><input class="amount-input" name="amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00 €" required value="${esc(t.amount||'')}"></div>
         <div class="form-grid">
-          ${!isTransfer?`<div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,t.categoryId)}</select></div>`:''}
-          <div class="field ${isTransfer?'':'full'}"><label>${isTransfer?'Откуда':'Счёт / способ оплаты'}</label><select name="accountId">${accountOptions(t.accountId||state.accounts[0]?.id)}</select></div>
-          ${isTransfer?`<div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(t.toAccountId||state.accounts[1]?.id||state.accounts[0]?.id,t.accountId)}</select></div>`:''}
-          <div class="field full"><label>Дата</label><input name="date" type="date" required value="${esc(t.date||todayISO())}"></div>
+          ${!isTransfer?`<div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,defaultCategory)}</select></div>`:''}
+          <div class="field ${isTransfer?'':'full'}"><label>${isTransfer?'Откуда':'Счёт / способ оплаты'}</label><select name="accountId">${accountOptions(defaultAccount)}</select></div>
+          ${isTransfer?`<div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div>`:''}
+          <div class="field full"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div>
           <div class="field full"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Например: REWE, аренда, бензин…" value="${esc(t.note||'')}"></div>
         </div>
         <button class="primary-btn" type="submit">${existing?'Сохранить изменения':'Добавить'}</button>
-        ${existing?'<button class="danger-btn" type="button" id="deleteTx">Удалить операцию</button>':''}
+        ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить эту операцию</button><button class="danger-btn" type="button" id="deleteTx">Удалить операцию</button>':''}
       </form>`);
     $$('[data-type]').forEach(b=>b.onclick=()=>{type=b.dataset.type;build()});
     $('#txForm').onsubmit=async e=>{
@@ -816,9 +1047,12 @@ function openTransactionSheet(existing=null,initialType='expense'){
       const obj={id:existing?.id||uid(),type,amount,date:fd.get('date'),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),note:String(fd.get('note')||'').trim(),createdAt:existing?.createdAt||Date.now()};
       if(type==='transfer' && obj.accountId===obj.toAccountId){showToast('Выберите разные счета');return}
       if(existing) state.transactions=state.transactions.map(x=>x.id===existing.id?obj:x); else state.transactions.push(obj);
+      state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[type]:obj.accountId};
+      if(type!=='transfer')state.settings.lastCategoryByType={...(state.settings.lastCategoryByType||{}),[type]:obj.categoryId};
       await persist();closeSheet();render();showToast(existing?'Операция обновлена':'Операция добавлена');
     };
-    const del=$('#deleteTx'); if(del)del.onclick=async()=>{if(confirm('Удалить эту операцию?')){state.transactions=state.transactions.filter(x=>x.id!==existing.id);await persist();closeSheet();render();showToast('Операция удалена')}};
+    const repeat=$('#repeatTx'); if(repeat)repeat.onclick=()=>openTransactionSheet(null,existing.type,existing);
+    const del=$('#deleteTx'); if(del)del.onclick=async()=>{if(confirm('Удалить эту операцию?')){state.transactions=state.transactions.filter(x=>x.id!==existing.id);state.planCompletions=state.planCompletions.filter(x=>x.transactionId!==existing.id);await persist();closeSheet();render();showToast('Операция удалена')}};
   }; build();
 }
 
@@ -833,6 +1067,7 @@ function openPlanSheet(existing=null){
         <div class="field full"><label>Название</label><input name="title" required placeholder="Например: аренда, зарплата или BAföG" value="${esc(p.title||'')}"></div>
         <div class="field full"><label>Сумма</label><input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal" value="${esc(p.amount||'')}"></div>
         <div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,p.categoryId)}</select></div>
+        ${type==='expense'?`<label class="switch-row full"><input name="required" type="checkbox" ${p.required!==false?'checked':''}><span><strong>Обязательный платёж</strong><small>Учитывать при расчёте реально свободных денег</small></span></label>`:''}
         <div class="field"><label>Повтор</label><select name="frequency" id="planFrequency"><option value="once" ${p.frequency!=='monthly'?'selected':''}>Один раз</option><option value="monthly" ${p.frequency==='monthly'?'selected':''}>Каждый месяц</option></select></div>
         <div class="field"><label id="planDateLabel">${p.frequency==='monthly'?'Первый платёж':'Дата'}</label><input name="date" type="date" required value="${esc(p.date||todayISO())}"></div>
         <div class="field full ${p.frequency==='monthly'?'':'hidden'}" id="planEndField"><label>Дата окончания <span class="field-hint">необязательно</span></label><input name="endDate" type="date" value="${esc(p.endDate||'')}"><small class="field-help">Оставьте пустым, если платёж идёт без ограничения по времени.</small></div>
@@ -852,7 +1087,7 @@ function openPlanSheet(existing=null){
       const date=fd.get('date');
       const endDate=frequency==='monthly'?String(fd.get('endDate')||''):'';
       if(endDate && endDate<date){showToast('Дата окончания не может быть раньше начала');return}
-      const obj={id:existing?.id||uid(),type,title:String(fd.get('title')).trim(),amount:Number(fd.get('amount')),categoryId:fd.get('categoryId'),frequency,date,endDate,accountId:fd.get('accountId')};
+      const obj={id:existing?.id||uid(),type,title:String(fd.get('title')).trim(),amount:Number(fd.get('amount')),categoryId:fd.get('categoryId'),frequency,date,endDate,accountId:fd.get('accountId'),required:type==='expense'?fd.get('required')==='on':false};
       if(existing)state.plans=state.plans.map(x=>x.id===existing.id?obj:x);else state.plans.push(obj);
       await persist();closeSheet();render();showToast('План сохранён');
     };
@@ -861,7 +1096,7 @@ function openPlanSheet(existing=null){
 }
 
 function openAccountsManager(){
-  openSheet(`<div class="sheet-head"><h3>Счета и кошельки</h3><button class="sheet-close">×</button></div><div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-edit-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div><span class="chevron">›</span></button>`).join('')}</div><button class="primary-btn" id="newAccount" style="margin-top:14px">Добавить счёт</button>`);
+  openSheet(`<div class="sheet-head"><h3>Счета и кошельки</h3><button class="sheet-close">×</button></div><div class="account-list">${state.accounts.map(a=>`<button class="account-item" data-edit-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon">${esc(a.icon||'💳')}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">защищён</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmt(accountBalance(a.id))}</div><span class="chevron">›</span></button>`).join('')}</div><button class="primary-btn" id="newAccount" style="margin-top:14px">Добавить счёт</button>`);
   $$('[data-edit-account]').forEach(b=>b.onclick=()=>openAccountSheet(account(b.dataset.editAccount)));
   $('#newAccount').onclick=()=>openAccountSheet();
 }
@@ -873,8 +1108,9 @@ function openAccountSheet(existing=null){
     <div class="field"><label>Тип</label><select name="type">${[['card','Карта'],['bank','Банковский счёт'],['cash','Наличные'],['savings','Накопительный'],['credit','Кредитная карта'],['other','Другой']].map(([v,n])=>`<option value="${v}" ${v===(a.type||'card')?'selected':''}>${n}</option>`).join('')}</select></div>
     <div class="field full"><label>Название</label><input name="name" required maxlength="40" placeholder="Например: Revolut" value="${esc(a.name||'')}"></div>
     <div class="field full"><label>Начальный остаток</label><input name="openingBalance" type="number" step="0.01" inputmode="decimal" value="${esc(a.openingBalance??0)}"></div>
+    <label class="switch-row full"><input name="protected" type="checkbox" ${a.protected?'checked':''}><span><strong>Защищённые накопления</strong><small>Баланс этого счёта не считается свободными деньгами для обычных трат</small></span></label>
   </div><div class="notice">Начальный остаток — сумма на счёте до первой внесённой в приложение операции. Позже баланс меняется автоматически.</div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button class="danger-btn" type="button" id="deleteAccount">Удалить счёт</button>':''}</form>`);
-  $('#accountForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:fd.get('icon'),openingBalance:Number(fd.get('openingBalance')||0)};if(existing)state.accounts=state.accounts.map(x=>x.id===existing.id?obj:x);else state.accounts.push(obj);await persist();closeSheet();render();showToast('Счёт сохранён')};
+  $('#accountForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),type:fd.get('type'),icon:fd.get('icon'),openingBalance:Number(fd.get('openingBalance')||0),protected:fd.get('protected')==='on'};if(existing)state.accounts=state.accounts.map(x=>x.id===existing.id?obj:x);else state.accounts.push(obj);await persist();closeSheet();render();showToast('Счёт сохранён')};
   const del=$('#deleteAccount');if(del)del.onclick=async()=>{const used=state.transactions.some(t=>t.accountId===existing.id||t.toAccountId===existing.id)||state.plans.some(p=>p.accountId===existing.id);if(used){showToast('Счёт используется в операциях или планах');return}if(state.accounts.length<=1){showToast('Нужен хотя бы один счёт');return}if(confirm('Удалить этот счёт?')){state.accounts=state.accounts.filter(x=>x.id!==existing.id);await persist();closeSheet();render()}};
 }
 
@@ -900,13 +1136,13 @@ function openBudgetSheet(existing=null){
 
 function openGoalSheet(existing=null){
   const g=existing||{};
-  openSheet(`<div class="sheet-head"><h3>${existing?'Изменить цель':'Новая цель'}</h3><button class="sheet-close">×</button></div><form id="goalForm"><div class="field"><label>Название</label><input name="title" required maxlength="50" placeholder="Например: отпуск" value="${esc(g.title||'')}"></div><div class="form-grid"><div class="field"><label>Цель</label><input name="target" type="number" step="0.01" min="0" required value="${esc(g.target||'')}"></div><div class="field"><label>Уже отложено</label><input name="saved" type="number" step="0.01" min="0" value="${esc(g.saved||0)}"></div></div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button type="button" class="danger-btn" id="deleteGoal">Удалить цель</button>':''}</form>`);
-  $('#goalForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),title:String(fd.get('title')).trim(),target:Number(fd.get('target')),saved:Number(fd.get('saved')||0)};if(existing)state.goals=state.goals.map(x=>x.id===existing.id?obj:x);else state.goals.push(obj);await persist();closeSheet();render()};
+  openSheet(`<div class="sheet-head"><h3>${existing?'Изменить цель':'Новая цель'}</h3><button class="sheet-close">×</button></div><form id="goalForm"><div class="field"><label>Название</label><input name="title" required maxlength="50" placeholder="Например: отпуск" value="${esc(g.title||'')}"></div><div class="form-grid"><div class="field"><label>Цель</label><input name="target" type="number" step="0.01" min="0" required value="${esc(g.target||'')}"></div><div class="field"><label>Уже отложено</label><input name="saved" type="number" step="0.01" min="0" value="${esc(g.saved||0)}"></div><div class="field full"><label>Желаемая дата <span class="field-hint">необязательно</span></label><input name="targetDate" type="date" value="${esc(g.targetDate||'')}"><small class="field-help">Если указать дату, приложение рассчитает необходимую сумму накоплений в месяц.</small></div></div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button type="button" class="danger-btn" id="deleteGoal">Удалить цель</button>':''}</form>`);
+  $('#goalForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),title:String(fd.get('title')).trim(),target:Number(fd.get('target')),saved:Number(fd.get('saved')||0),targetDate:String(fd.get('targetDate')||'')};if(obj.targetDate&&obj.targetDate<todayISO()){showToast('Дата цели должна быть в будущем');return}if(existing)state.goals=state.goals.map(x=>x.id===existing.id?obj:x);else state.goals.push(obj);await persist();closeSheet();render()};
   const del=$('#deleteGoal');if(del)del.onclick=async()=>{state.goals=state.goals.filter(x=>x.id!==existing.id);await persist();closeSheet();render()};
 }
 
 function openReserveSheet(){
-  openSheet(`<div class="sheet-head"><h3>Неприкосновенный резерв</h3><button class="sheet-close">×</button></div><form id="reserveForm"><div class="field"><label>Сумма резерва</label><input name="reserve" type="number" step="0.01" min="0" inputmode="decimal" value="${esc(state.settings.reserve||0)}"></div><div class="notice">Резерв не меняет реальный баланс. Он вычитается только из показателя «Свободно», чтобы не считать эти деньги доступными для обычных трат.</div><button class="primary-btn" type="submit">Сохранить</button></form>`);
+  openSheet(`<div class="sheet-head"><h3>Дополнительный резерв</h3><button class="sheet-close">×</button></div><form id="reserveForm"><div class="field"><label>Сумма резерва</label><input name="reserve" type="number" step="0.01" min="0" inputmode="decimal" value="${esc(state.settings.reserve||0)}"></div><div class="notice">Эта сумма вычитается из «Свободно» дополнительно к счетам, помеченным как защищённые накопления. Реальный капитал не меняется.</div><button class="primary-btn" type="submit">Сохранить</button></form>`);
   $('#reserveForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);state.settings.reserve=Number(fd.get('reserve')||0);await persist();closeSheet();render()};
 }
 

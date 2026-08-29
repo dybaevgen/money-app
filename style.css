@@ -920,7 +920,7 @@ html[data-motion="minimal"] ::view-transition-group(app-main),html[data-motion="
 
 /* Performance: off-screen sections don't need full paint work. */
 .section{content-visibility:auto;contain-intrinsic-size:auto 180px}
-.chart-surface,.forecast-panel,.bottom-nav,.sheet{transform:translateZ(0)}
+.chart-surface,.forecast-panel{transform:translateZ(0)}
 .main{will-change:auto!important;contain:layout style}
 .bottom-nav{will-change:auto!important}
 .sheet{transition:transform var(--sheet-duration) var(--ease-spring)!important}
@@ -1267,4 +1267,23 @@ html{--accent-soft:rgba(var(--accent-rgb),.14)}
   margin:4px 0 0;
   color:var(--muted);
   font-size:9px;
+}
+
+/* V4.1 hotfix — fixed overlays must stay viewport-centered. */
+.bottom-nav{
+  left:50%!important;
+  right:auto!important;
+  width:min(calc(100vw - 8px),752px)!important;
+  max-width:calc(100vw - 8px)!important;
+  transform:translate3d(-50%,0,0)!important;
+}
+.sheet{
+  left:50%!important;
+  right:auto!important;
+  width:min(100vw,760px)!important;
+}
+.sheet:not(.sheet-visible){transform:translate3d(-50%,105%,0)!important}
+.sheet.sheet-visible{transform:translate3d(-50%,0,0)!important}
+@media(max-width:520px){
+  .bottom-nav{width:calc(100vw - 8px)!important;}
 }

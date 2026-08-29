@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '4.9.0';
+const APP_VERSION = '5.0.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -1049,9 +1049,12 @@ function switchTab(next){
   const newIndex=tabIndex(next);
   const direction=newIndex>=oldIndex?1:-1;
 
-  // Navigation is intentionally untouched here. Only #main is replaced.
+  // Every tab always opens from the top. We deliberately do not restore
+  // the previous scroll coordinate for primary navigation.
   activeTab=next;
-  window.scrollTo(0,Number(uiMemory.scroll?.[next])||0);
+  window.scrollTo(0,0);
+  document.documentElement.scrollTop=0;
+  document.body.scrollTop=0;
   render({motion:'tab',direction});
 }
 

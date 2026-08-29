@@ -2506,3 +2506,361 @@ body.sheet-open > .bottom-nav{
   -webkit-backdrop-filter:blur(26px) saturate(1.34)!important;
   backdrop-filter:blur(26px) saturate(1.34)!important;
 }
+
+
+/* =========================================================
+   V5.0 — Unified Design System
+   Calm surfaces, strong hierarchy, one glass language.
+   ========================================================= */
+
+:root{
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:24px;
+  --space-6:32px;
+
+  --radius-s:12px;
+  --radius-m:16px;
+  --radius-l:22px;
+  --radius-xl:28px;
+
+  --surface-base:#090d14;
+  --surface-soft:rgba(255,255,255,.018);
+  --surface-raised:rgba(255,255,255,.032);
+  --surface-strong:rgba(255,255,255,.050);
+  --line-soft-v5:rgba(255,255,255,.060);
+  --line-strong-v5:rgba(255,255,255,.095);
+
+  --text-1:#f4f7fb;
+  --text-2:rgba(224,231,241,.74);
+  --text-3:rgba(191,201,216,.52);
+}
+
+/* ---------- Global rhythm ---------- */
+body{
+  background:
+    radial-gradient(120% 85% at 50% -10%,rgba(42,60,94,.12),transparent 55%),
+    var(--surface-base)!important;
+}
+
+#main{
+  padding-left:18px!important;
+  padding-right:18px!important;
+}
+
+.section{
+  margin-top:var(--space-5)!important;
+}
+
+.section-head{
+  margin-bottom:10px!important;
+}
+
+.section-head h2{
+  font-size:18px!important;
+  font-weight:680!important;
+  letter-spacing:-.035em!important;
+  color:var(--text-1)!important;
+}
+
+/* ---------- Typography hierarchy ---------- */
+.page-title,
+.hero-title,
+h1{
+  letter-spacing:-.055em!important;
+  font-weight:700!important;
+}
+
+.capital-value{
+  font-size:clamp(42px,12vw,64px)!important;
+  font-weight:700!important;
+  letter-spacing:-.065em!important;
+  color:var(--text-1)!important;
+}
+
+small,
+.muted,
+.subtle-copy,
+.item-meta,
+.hero-label,
+.eyebrow{
+  color:var(--text-3)!important;
+}
+
+/* ---------- Overview: less card framing ---------- */
+.hero-card,
+.overview-hero,
+.capital-card{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  padding-left:0!important;
+  padding-right:0!important;
+}
+
+.hero-card::before,
+.overview-hero::before,
+.capital-card::before{
+  display:none!important;
+}
+
+/* The core financial facts should read as one composition, not nested boxes. */
+.money-status,
+.month-outlook,
+.month-summary{
+  background:var(--surface-soft)!important;
+  border:1px solid var(--line-soft-v5)!important;
+  border-radius:var(--radius-l)!important;
+  box-shadow:none!important;
+}
+
+/* ---------- Accounts: flatter tiles ---------- */
+.account-row,
+.account-card,
+.account-tile{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+
+.account-row + .account-row,
+.account-card + .account-card,
+.account-tile + .account-tile{
+  border-top:1px solid var(--line-soft-v5)!important;
+}
+
+/* ---------- Lists: separators over boxed rows ---------- */
+.list-surface{
+  background:var(--surface-soft)!important;
+  border:1px solid var(--line-soft-v5)!important;
+  border-radius:var(--radius-l)!important;
+  overflow:hidden!important;
+}
+
+.list-surface > * + *{
+  border-top-color:var(--line-soft-v5)!important;
+}
+
+/* ---------- General card discipline ---------- */
+.card,
+.kpi,
+.plan-advice,
+.stats-hero,
+.forecast-card,
+.money-status,
+.month-summary,
+.deficit-month-card,
+.analysis-row{
+  box-shadow:none!important;
+}
+
+.card,
+.kpi,
+.stats-hero,
+.forecast-card{
+  background:var(--surface-soft)!important;
+  border:1px solid var(--line-soft-v5)!important;
+  border-radius:var(--radius-m)!important;
+}
+
+.card .card,
+.card .kpi,
+.plan-advice .deficit-month-card,
+.algorithm-analysis .analysis-row{
+  background:rgba(255,255,255,.012)!important;
+  border-color:rgba(255,255,255,.045)!important;
+}
+
+/* ---------- KPI: compact and typographic ---------- */
+.kpi{
+  padding:12px 12px!important;
+}
+
+.kpi small{
+  font-size:8.5px!important;
+  line-height:1.2!important;
+}
+
+.kpi strong{
+  margin-top:4px!important;
+  font-size:17px!important;
+  font-weight:680!important;
+  letter-spacing:-.045em!important;
+}
+
+/* ---------- Plan becomes the visual hero ---------- */
+.plan-chart,
+.forecast-chart,
+.chart.plan-chart{
+  background:
+    radial-gradient(90% 70% at 50% 100%,rgba(94,130,230,.06),transparent 70%),
+    transparent!important;
+  border:0!important;
+  border-radius:0!important;
+  padding-left:0!important;
+  padding-right:0!important;
+}
+
+.plan-advice{
+  border-radius:var(--radius-l)!important;
+  border:1px solid var(--line-soft-v5)!important;
+  background:var(--surface-soft)!important;
+}
+
+.plan-advice.warning{
+  background:
+    radial-gradient(100% 85% at 0 0,rgba(241,129,112,.05),transparent 58%),
+    var(--surface-soft)!important;
+}
+
+/* ---------- Statistics: editorial, not dashboard-heavy ---------- */
+.stats-hero{
+  border:0!important;
+  background:transparent!important;
+  padding-left:0!important;
+  padding-right:0!important;
+}
+
+.stats-hero strong{
+  font-size:clamp(30px,9vw,44px)!important;
+  letter-spacing:-.055em!important;
+}
+
+.stats-grid,
+.grid-3,
+.grid-2{
+  gap:8px!important;
+}
+
+/* ---------- Charts: quieter ---------- */
+.chart{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+
+.chart svg{
+  overflow:visible!important;
+}
+
+.chart-tooltip{
+  background:rgba(17,23,33,.90)!important;
+  border:1px solid rgba(221,231,255,.10)!important;
+  border-radius:15px!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.22)!important;
+}
+
+/* ---------- Categories and icon containers ---------- */
+.settings-icon,
+.row-icon,
+.account-icon,
+.app-version-icon{
+  background:rgba(255,255,255,.024)!important;
+  border:1px solid rgba(255,255,255,.045)!important;
+  box-shadow:none!important;
+}
+
+/* ---------- Buttons ---------- */
+.primary-btn{
+  border-radius:16px!important;
+  box-shadow:none!important;
+}
+
+.secondary-btn,
+.quick-btn,
+.chip,
+.segmented button{
+  border-radius:14px!important;
+  background:rgba(255,255,255,.024)!important;
+  border:1px solid rgba(255,255,255,.055)!important;
+  box-shadow:none!important;
+}
+
+/* ---------- Sheets: one consistent language ---------- */
+.sheet,
+.sheet-panel{
+  border-radius:28px 28px 0 0!important;
+  background:
+    linear-gradient(180deg,rgba(23,29,40,.985),rgba(11,15,23,.995))!important;
+  border:1px solid rgba(255,255,255,.08)!important;
+  box-shadow:0 -18px 42px rgba(0,0,0,.28)!important;
+}
+
+.sheet-handle{
+  width:38px!important;
+  height:4px!important;
+  background:rgba(220,229,243,.26)!important;
+}
+
+/* ---------- Liquid Glass dock kept as the single strong glass element ---------- */
+body > .bottom-nav{
+  border-color:rgba(226,236,255,.14)!important;
+  box-shadow:
+    0 14px 34px rgba(0,0,0,.28),
+    inset 0 1px 0 rgba(255,255,255,.19)!important;
+}
+
+body > .bottom-nav .nav-item{
+  color:rgba(196,205,220,.60)!important;
+}
+
+body > .bottom-nav .nav-item.active{
+  color:#dce7fb!important;
+}
+
+/* ---------- Microinteractions ---------- */
+@media (prefers-reduced-motion:no-preference){
+  .account-row,
+  .timeline-item,
+  .settings-row,
+  .transaction-row{
+    transition:
+      background-color var(--motion-fast) ease,
+      transform var(--motion-fast) cubic-bezier(.2,.8,.2,1)!important;
+  }
+
+  .account-row:active,
+  .timeline-item:active,
+  .settings-row:active,
+  .transaction-row:active{
+    transform:scale(.988)!important;
+    background:rgba(255,255,255,.025)!important;
+  }
+}
+
+/* ---------- Ambient finance accents: extremely restrained ---------- */
+.positive{
+  text-shadow:0 0 18px rgba(76,205,146,.055);
+}
+
+.negative{
+  text-shadow:0 0 18px rgba(239,109,109,.045);
+}
+
+/* ---------- More page ---------- */
+.app-version-card{
+  background:transparent!important;
+  border:1px solid var(--line-soft-v5)!important;
+  border-radius:var(--radius-l)!important;
+}
+
+.settings-group,
+.more-group{
+  background:var(--surface-soft)!important;
+  border:1px solid var(--line-soft-v5)!important;
+  border-radius:var(--radius-l)!important;
+  overflow:hidden!important;
+}
+
+/* ---------- Explicitly prevent "cards inside cards" ---------- */
+.card .list-surface,
+.card .settings-group,
+.card .money-status{
+  margin-left:-1px!important;
+  margin-right:-1px!important;
+  border-left:0!important;
+  border-right:0!important;
+  border-radius:0!important;
+}

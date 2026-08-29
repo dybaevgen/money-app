@@ -2057,3 +2057,156 @@ hr,
     transition-duration:var(--motion-fast)!important;
   }
 }
+
+
+/* =========================================================
+   V4.7 — Minimal Dock
+   One surface only. The FAB is the only raised control.
+   ========================================================= */
+
+/* Remove all nested active-tab capsules inherited from previous versions. */
+body > .bottom-nav .nav-item,
+body > .bottom-nav .nav-item.active{
+  background:transparent!important;
+  box-shadow:none!important;
+  border:0!important;
+  overflow:visible!important;
+}
+
+body > .bottom-nav .nav-item::before,
+body > .bottom-nav .nav-item::after,
+body > .bottom-nav .nav-item.active::before,
+body > .bottom-nav .nav-item.active::after{
+  content:none!important;
+  display:none!important;
+  background:none!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+
+/* Active state = typography/icon only. */
+body > .bottom-nav .nav-item{
+  color:rgba(190,199,218,.62)!important;
+}
+body > .bottom-nav .nav-item.active{
+  color:#b8ceff!important;
+}
+body > .bottom-nav .nav-item .nav-icon{
+  filter:none!important;
+  transform:translateZ(0);
+  transition:
+    color var(--motion-fast) ease,
+    opacity var(--motion-fast) ease,
+    transform var(--motion-fast) cubic-bezier(.2,.8,.2,1)!important;
+}
+body > .bottom-nav .nav-item.active .nav-icon{
+  filter:drop-shadow(0 2px 7px rgba(105,150,255,.22))!important;
+  transform:translateY(-1px)!important;
+}
+body > .bottom-nav .nav-item small{
+  text-shadow:none!important;
+  transition:color var(--motion-fast) ease,opacity var(--motion-fast) ease!important;
+}
+body > .bottom-nav .nav-item.active small{
+  color:#d9e4fb!important;
+  text-shadow:none!important;
+}
+
+/* Tiny non-card indicator: a 3px light point. */
+body > .bottom-nav .nav-item.active > small::after{
+  content:"";
+  display:block;
+  width:3px;
+  height:3px;
+  margin:4px auto 0;
+  border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 7px color-mix(in srgb,var(--accent) 58%,transparent);
+}
+
+/* Keep the parent dock visually singular. */
+body > .bottom-nav{
+  background:
+    linear-gradient(180deg,rgba(29,37,53,.965),rgba(16,21,31,.978))!important;
+}
+
+
+/* =========================================================
+   V4.8 — Layer Architecture
+   page < dock < backdrop < sheet < toast
+   ========================================================= */
+:root{
+  --z-page:1;
+  --z-dock:100;
+  --z-backdrop:400;
+  --z-sheet:500;
+  --z-toast:700;
+}
+
+#app{position:relative;z-index:var(--z-page)!important}
+
+body > .bottom-nav{
+  z-index:var(--z-dock)!important;
+}
+
+/* Cover the complete viewport, including the dock. */
+.sheet-backdrop,
+#sheetBackdrop{
+  position:fixed!important;
+  inset:0!important;
+  z-index:var(--z-backdrop)!important;
+}
+
+/* Every sheet must live above the permanent navigation dock. */
+.sheet-panel,
+.sheet,
+#sheet{
+  z-index:var(--z-sheet)!important;
+}
+
+/* Toasts remain visible above modal surfaces when needed. */
+.toast,
+#toast,
+.toast-stack{
+  z-index:var(--z-toast)!important;
+}
+
+/* When a modal sheet is open, the dock retreats instead of competing with it. */
+body.sheet-open > .bottom-nav{
+  transform:translate3d(-50%,calc(100% + 18px),0)!important;
+  opacity:.22!important;
+  pointer-events:none!important;
+  transition:
+    transform var(--motion-normal) cubic-bezier(.32,.72,0,1),
+    opacity var(--motion-fast) ease!important;
+}
+body:not(.sheet-open) > .bottom-nav{
+  opacity:1!important;
+  pointer-events:auto!important;
+  transition:
+    transform var(--motion-normal) cubic-bezier(.16,.82,.22,1),
+    opacity var(--motion-fast) ease!important;
+}
+
+/* Sheet itself owns the bottom safe area; no navigation clearance inside it. */
+.sheet-panel,
+.sheet,
+#sheet{
+  padding-bottom:max(18px,env(safe-area-inset-bottom))!important;
+}
+
+/* More natural modal backdrop while keeping rendering cheap. */
+body.sheet-open .sheet-backdrop,
+body.sheet-open #sheetBackdrop{
+  background:rgba(2,5,10,.56)!important;
+}
+
+/* iPhone 16 Pro Max: sheet edge sits flush to viewport bottom. */
+@media (min-width:425px) and (max-width:455px) and (orientation:portrait){
+  .sheet-panel,
+  .sheet,
+  #sheet{
+    bottom:0!important;
+    max-height:calc(100dvh - 70px)!important;
+  }
+}

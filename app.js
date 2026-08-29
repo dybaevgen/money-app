@@ -254,20 +254,29 @@ function forecastSeries(months=12, scenario={}){
   };
 }
 
-function requiredMonthlyTopUp(series){
-  let required=0;
-  for(let i=1;i<series.length;i++){
-    const v=Number(series[i].value)||0;
-    if(v<0) required=Math.max(required,(-v)/i);
-  }
-  return Math.ceil(required*100)/100;
+function monthlyCashflowHealth(series){
+  const future=series.slice(1);
+  const rows=future.map((x,index)=>{
+    const income=Number(x.income)||0;
+    const expense=Number(x.expense)||0;
+    return {...x,index:index+1,income,expense,net:income-expense,shortfall:Math.max(0,expense-income)};
+  });
+  const deficits=rows.filter(x=>x.shortfall>0.005);
+  const worst=deficits.reduce((best,x)=>!best||x.shortfall>best.shortfall?x:best,null);
+  return {
+    hasDeficit:deficits.length>0,
+    deficitMonths:deficits.length,
+    firstDeficit:deficits[0]||null,
+    worstDeficit:worst,
+    required:worst?Math.ceil(worst.shortfall*100)/100:0
+  };
 }
 
 function forecastHealth(series){
   const future=series.slice(1);
   const min=future.length?Math.min(...future.map(x=>Number(x.value)||0)):totalBalance();
   const minIndex=future.findIndex(x=>(Number(x.value)||0)===min)+1;
-  return {min,minIndex,required:requiredMonthlyTopUp(series)};
+  return {min,minIndex,cashflow:monthlyCashflowHealth(series)};
 }
 
 function nextOccurrence(plan, from=new Date()){
@@ -406,23 +415,41 @@ function bindInteractiveCharts(){
   $$('.interactive-chart').forEach(el=>{
     const data=chartRegistry.get(el.dataset.chartId); if(!data?.length)return;
     const svg=$('svg',el), cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
+    let activePointer=null;
     const show=(clientX)=>{
-      const rect=el.getBoundingClientRect();
-      const rel=Math.max(0,Math.min(rect.width,clientX-rect.left));
-      const idx=Math.max(0,Math.min(data.length-1,Math.round(rel/Math.max(1,rect.width)*(data.length-1))));
-      const d=data[idx];
+      const rect=svg.getBoundingClientRect();
       const vb=svg.viewBox.baseVal, pl=56, pr=18, pt=16, pb=34;
+      const scaleX=vb.width/Math.max(1,rect.width);
+      const svgX=(clientX-rect.left)*scaleX;
+      const plotX=Math.max(pl,Math.min(vb.width-pr,svgX));
+      const ratio=(plotX-pl)/Math.max(1,(vb.width-pl-pr));
+      const idx=Math.max(0,Math.min(data.length-1,Math.round(ratio*(data.length-1))));
+      const d=data[idx];
       const x=pl+(idx*(vb.width-pl-pr)/(Math.max(1,data.length-1)));
       const values=data.map(x=>Number(x.value)||0); let min=Math.min(...values),max=Math.max(...values); const pad=(max-min||Math.max(1,Math.abs(max)*.2||1))*.14; min-=pad;max+=pad;if(min>0)min=Math.max(0,min);if(max<0)max=Math.min(0,max);if(max===min){max+=1;min-=1}
       const y=pt+(max-(Number(d.value)||0))/(max-min)*(vb.height-pt-pb);
       cursor.setAttribute('x1',x);cursor.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
       cursor.classList.remove('hidden');dot.classList.remove('hidden');tip.classList.remove('hidden');
-      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)&&idx>0?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b></span>`:''}`;
+      tip.innerHTML=`<small>${esc(d.tooltipLabel||d.label||'')}</small><strong>${fmt(d.value)}</strong>${Number.isFinite(d.income)&&Number.isFinite(d.expense)&&idx>0?`<span><b class="positive">+${fmt(d.income)}</b> · <b class="negative">−${fmt(d.expense)}</b> · <b class="${d.income-d.expense>=0?'positive':'negative'}">${fmt(d.income-d.expense,true)}</b></span>`:''}`;
       const pct=x/vb.width*100; tip.style.left=`${Math.min(82,Math.max(18,pct))}%`;
     };
-    el.addEventListener('pointerdown',e=>show(e.clientX));
-    el.addEventListener('pointermove',e=>{if(e.pointerType==='mouse'||e.buttons||e.pointerType==='touch')show(e.clientX)});
-    el.addEventListener('pointerleave',()=>{cursor.classList.add('hidden');dot.classList.add('hidden');tip.classList.add('hidden')});
+    el.addEventListener('pointerdown',e=>{
+      activePointer=e.pointerId;
+      try{el.setPointerCapture(e.pointerId)}catch(_){}
+      e.preventDefault();
+      show(e.clientX);
+    },{passive:false});
+    el.addEventListener('pointermove',e=>{
+      if(activePointer!==e.pointerId && e.pointerType!=='mouse')return;
+      if(e.pointerType!=='mouse')e.preventDefault();
+      if(e.pointerType==='mouse' && !e.buttons && activePointer===null)return;
+      show(e.clientX);
+    },{passive:false});
+    const finish=e=>{
+      if(activePointer===e.pointerId){try{el.releasePointerCapture(e.pointerId)}catch(_){} activePointer=null;}
+    };
+    el.addEventListener('pointerup',finish);
+    el.addEventListener('pointercancel',finish);
   });
 }
 
@@ -447,9 +474,17 @@ function showToast(msg){
 }
 
 function setPageTitle(title){ $('#pageTitle').textContent=title; }
+function updateNavGlider(){
+  const nav=$('.bottom-nav'), glider=$('.nav-glider'), items=$$('.nav-item');
+  if(!nav||!glider||!items.length)return;
+  const idx=Math.max(0,items.findIndex(b=>b.dataset.tab===activeTab));
+  glider.style.setProperty('--nav-index',idx);
+}
+
 function render(){
   chartRegistry.clear();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
+  updateNavGlider();
   const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title);
   if(activeTab==='overview') renderOverview();
   if(activeTab==='transactions') renderTransactions();
@@ -558,7 +593,7 @@ function planForecastHTML(){
       <div class="kpi"><small>Минимум</small><strong class="${health.min>=0?'positive':'negative'}">${fmt(health.min)}</strong></div>
       <div class="kpi"><small>Изменение</small><strong class="${change>=0?'positive':'negative'}">${fmt(change,true)}</strong></div>
     </div>
-    ${health.required>0?`<div class="zero-alert"><div class="zero-alert-icon">↗</div><div><small>Прогноз уходит ниже нуля</small><strong>Нужно ещё ${fmt(health.required)} / месяц</strong><p>Если получать на эту сумму больше каждый месяц, расчётный баланс не опустится ниже 0 € на выбранном горизонте.</p></div></div>`:`<div class="notice good">На выбранном горизонте капитал не опускается ниже 0 €. Минимальный расчётный остаток: <b>${fmt(health.min)}</b>.</div>`}`;
+    ${health.cashflow.required>0?`<div class="zero-alert"><div class="zero-alert-icon">↗</div><div><small>В плане есть месяцы с отрицательным результатом</small><strong>Нужно зарабатывать ещё ${fmt(health.cashflow.required)} / месяц</strong><p>Это разница между доходами и расходами в самом дефицитном месяце выбранного периода. Показатель считается по месячному денежному потоку, даже если накоплений пока хватает.</p></div></div>`:`<div class="notice good">Месячный план сбалансирован: во всех месяцах выбранного периода доходы не ниже расходов. Минимальный расчётный капитал: <b>${fmt(health.min)}</b>.</div>`}`;
 }
 
 function refreshPlanForecast(){

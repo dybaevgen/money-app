@@ -3136,3 +3136,535 @@ body > .bottom-nav .nav-item.active{
 .duplicate-list{display:grid;gap:10px}.duplicate-group{border:1px solid var(--line-soft-v5);border-radius:16px;padding:12px;background:var(--surface-soft)}.duplicate-group>strong,.duplicate-group>small{display:block}.duplicate-group>small{margin:3px 0 8px;color:var(--text-3);font-size:8px}.duplicate-group button{width:100%;display:flex;justify-content:space-between;border:0;border-top:1px solid var(--line-soft-v5);background:transparent;color:var(--text-2);padding:9px 0;font-size:9px}.duplicate-group button span{color:var(--text-3)}
 .section-mini-title{margin:14px 2px 7px;color:var(--text-3);font-size:9px;font-weight:650;text-transform:uppercase;letter-spacing:.08em}
 @media (min-width:425px) and (max-width:455px) and (orientation:portrait){.finance-calendar{padding:13px}.cal-day{height:54px}.cal-day>span{font-size:11.5px}.cal-day small{font-size:7px}}
+
+
+/* =========================================================
+   V6.1 — Forecast chart geometry hotfix
+   Fixes distorted SVG typography and X-axis/KPI overlap.
+   ========================================================= */
+
+/* The chart now owns a fixed mobile-native aspect region.
+   No min-height inheritance from V5.2 may stretch it anymore. */
+.plan-chart{
+  height:auto!important;
+  min-height:0!important;
+  margin-top:8px!important;
+  margin-bottom:14px!important;
+  overflow:hidden!important;
+}
+
+.plan-chart > .chart-shell{
+  width:100%!important;
+  height:auto!important;
+  min-height:0!important;
+  aspect-ratio:400 / 260!important;
+  overflow:hidden!important;
+}
+
+.plan-chart > .chart-shell > svg{
+  width:100%!important;
+  height:100%!important;
+  display:block!important;
+  overflow:hidden!important;
+}
+
+/* Undo the old generic V5.2 mobile min-height that caused a 400×260 SVG
+   to be vertically stretched inside a 320px shell. */
+@media (min-width:425px) and (max-width:455px) and (orientation:portrait){
+  .plan-chart > .chart-shell{
+    min-height:0!important;
+    height:auto!important;
+    aspect-ratio:400 / 260!important;
+  }
+
+  .plan-chart{
+    margin-left:0!important;
+    margin-right:0!important;
+    margin-bottom:16px!important;
+  }
+}
+
+/* Native-looking axis typography. These are the classes actually emitted
+   by svgLine(), unlike the earlier generic chart-axis selectors. */
+.plan-chart .chart-y-label,
+.plan-chart .chart-axis-y{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif!important;
+  font-size:8.8px!important;
+  font-weight:500!important;
+  font-stretch:normal!important;
+  letter-spacing:0!important;
+  fill:rgba(174,186,205,.56)!important;
+}
+
+.plan-chart .chart-label,
+.plan-chart .chart-axis-x{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif!important;
+  font-size:9.6px!important;
+  font-weight:500!important;
+  font-stretch:normal!important;
+  letter-spacing:0!important;
+  fill:rgba(188,199,217,.62)!important;
+}
+
+/* The KPI block is a separate layout region; it can no longer overlap
+   X-axis labels even if a browser rounds SVG dimensions differently. */
+.plan-kpis{
+  position:relative!important;
+  z-index:2!important;
+  margin-top:0!important;
+  padding-top:2px!important;
+}
+
+/* Keep chart text completely free from inherited transforms/animations. */
+.plan-chart svg text{
+  transform:none!important;
+  transform-origin:center!important;
+  filter:none!important;
+  paint-order:normal!important;
+}
+
+/* iPhone 16 Pro Max specific optical tuning (440 CSS px viewport). */
+@media (min-width:432px) and (max-width:448px) and (orientation:portrait){
+  .plan-chart .chart-y-label,
+  .plan-chart .chart-axis-y{
+    font-size:8.7px!important;
+  }
+
+  .plan-chart .chart-label,
+  .plan-chart .chart-axis-x{
+    font-size:9.5px!important;
+  }
+}
+
+/* Dense horizons need smaller labels, but never condensed glyphs. */
+.plan-chart .chart-shell[data-points="13"] .chart-axis-x,
+.plan-chart .chart-shell[data-points="19"] .chart-axis-x{
+  font-size:8.2px!important;
+}
+
+
+/* =========================================================
+   V6.2 — Premium iOS Motion System
+   Compositor-safe: transform + opacity for moving surfaces.
+   Static glass remains static to preserve iPhone stability.
+   ========================================================= */
+
+:root{
+  --ease-ios:cubic-bezier(.16,.84,.20,1);
+  --ease-ios-spring:cubic-bezier(.16,.90,.18,1);
+  --ease-ios-press:cubic-bezier(.20,.78,.22,1);
+}
+
+/* Native momentum scrolling and stable overscroll behavior. */
+html{
+  scroll-behavior:auto;
+  overscroll-behavior-y:none;
+}
+body,
+.sheet{
+  -webkit-overflow-scrolling:touch;
+}
+
+/* Tap feedback: fast on the way down, soft on release. */
+button,
+[role="button"],
+.account-item,
+.tx-item,
+.plan-item,
+.timeline-item,
+.goal-overview,
+.budget-overview,
+.list-button,
+.settings-row,
+.inbox-item{
+  -webkit-tap-highlight-color:transparent;
+  transform:translateZ(0);
+}
+
+button.is-pressed,
+[role="button"].is-pressed{
+  transform:scale(.965)!important;
+  opacity:.88!important;
+  transition-duration:var(--motion-instant)!important;
+}
+
+.primary-btn.is-pressed,
+.secondary-btn.is-pressed,
+.app-update-btn.is-pressed{
+  transform:scale(.975)!important;
+}
+
+.account-item.is-pressed,
+.tx-item.is-pressed,
+.plan-item.is-pressed,
+.timeline-item.is-pressed,
+.settings-row.is-pressed{
+  transform:scale(.988)!important;
+}
+
+/* Navigation: active icon settles in with a restrained spring. */
+body > .bottom-nav .nav-item{
+  transition:
+    transform var(--motion-base) var(--ease-ios),
+    color var(--motion-base) ease,
+    opacity var(--motion-base) ease!important;
+}
+
+body > .bottom-nav .nav-item .nav-icon{
+  transition:
+    transform var(--motion-base) var(--ease-ios-spring),
+    opacity var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    filter var(--motion-base) ease!important;
+}
+
+body > .bottom-nav .nav-item.active .nav-icon{
+  transform:translate3d(0,-2px,0) scale(1.045)!important;
+}
+
+body > .bottom-nav .nav-item.active > small::after{
+  animation:navDotSettle var(--motion-base) var(--ease-ios-spring) both;
+}
+
+@keyframes navDotSettle{
+  from{opacity:0;transform:translateY(3px) scale(.35)}
+  70%{opacity:1;transform:translateY(-.5px) scale(1.12)}
+  to{opacity:1;transform:none}
+}
+
+/* Liquid FAB: responsive without animating blur. */
+body > .bottom-nav #fab{
+  transition:
+    transform var(--motion-base) var(--ease-ios-spring),
+    box-shadow var(--motion-base) ease,
+    opacity var(--motion-fast) ease!important;
+}
+
+body > .bottom-nav #fab:active,
+body > .bottom-nav #fab.is-pressed{
+  transform:scale(.91) translate3d(0,1px,0)!important;
+}
+
+/* Sheets: lower travel, premium spring, stable backdrop. */
+.sheet,
+.sheet-panel{
+  transition:
+    transform var(--sheet-duration) var(--ease-ios-spring),
+    opacity var(--motion-base) ease!important;
+  will-change:transform;
+}
+
+.sheet-backdrop,
+#sheetBackdrop{
+  transition:opacity var(--motion-base) ease!important;
+}
+
+.sheet.sheet-visible,
+.sheet-panel.sheet-visible{
+  transform:translate3d(-50%,0,0)!important;
+}
+
+.sheet-handle{
+  transition:
+    width var(--motion-base) var(--ease-ios),
+    opacity var(--motion-fast) ease,
+    background-color var(--motion-fast) ease!important;
+}
+
+.sheet-visible .sheet-handle{
+  animation:sheetHandleSettle var(--motion-slow) var(--ease-ios-spring) both;
+}
+
+@keyframes sheetHandleSettle{
+  from{opacity:.25;transform:scaleX(.72)}
+  70%{opacity:1;transform:scaleX(1.06)}
+  to{opacity:1;transform:scaleX(1)}
+}
+
+/* Inputs and segmented controls react like native controls. */
+.field input,
+.field select,
+.field textarea,
+.tx-search,
+.scenario-grid input{
+  transition:
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease,
+    background-color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-ios)!important;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.tx-search:focus,
+.scenario-grid input:focus{
+  transform:translateZ(0) scale(1.006);
+}
+
+.segmented button,
+.forecast-range-tabs button,
+.pill-tabs button,
+.choice-chip,
+.filter-chip{
+  transition:
+    transform var(--motion-base) var(--ease-ios-spring),
+    background-color var(--motion-base) ease,
+    color var(--motion-base) ease,
+    opacity var(--motion-fast) ease!important;
+}
+
+.segmented button:active,
+.forecast-range-tabs button:active,
+.pill-tabs button:active,
+.choice-chip:active,
+.filter-chip:active{
+  transform:scale(.955)!important;
+}
+
+/* Lists and cards: motion only on interaction, no permanent GPU tax. */
+.card,
+.clean-surface,
+.list-surface,
+.account-item,
+.tx-item,
+.plan-item,
+.timeline-item,
+.goal-overview,
+.budget-overview,
+.inbox-item,
+.settings-row{
+  transition:
+    transform var(--motion-base) var(--ease-ios-spring),
+    opacity var(--motion-base) ease,
+    background-color var(--motion-base) ease,
+    border-color var(--motion-base) ease!important;
+}
+
+/* Expand/collapse surfaces. */
+details[open] > :not(summary){
+  animation:iosDetailsIn var(--motion-base) var(--ease-ios) both;
+}
+@keyframes iosDetailsIn{
+  from{opacity:0;transform:translate3d(0,-5px,0)}
+  to{opacity:1;transform:none}
+}
+
+/* Charts keep their "rise from zero", but settle more naturally. */
+.chart-shell.chart-rise .chart-line{
+  animation-duration:var(--motion-slow)!important;
+  animation-timing-function:var(--ease-ios)!important;
+}
+.chart-shell.chart-rise .chart-area{
+  animation-duration:var(--motion-slow)!important;
+  animation-timing-function:var(--ease-ios)!important;
+}
+.chart-shell.chart-rise .chart-dot,
+.chart-shell.chart-rise .chart-event-dot{
+  animation-timing-function:var(--ease-ios-spring)!important;
+}
+
+.chart-tooltip{
+  transition:
+    opacity var(--motion-instant) linear,
+    transform var(--motion-fast) var(--ease-ios-spring)!important;
+}
+
+/* Toast behaves like a floating iOS notification. */
+.toast{
+  transform-origin:center bottom;
+  transition:
+    opacity var(--motion-base) ease,
+    transform var(--motion-base) var(--ease-ios-spring)!important;
+}
+
+.toast.hidden{
+  opacity:0!important;
+  transform:translate3d(-50%,10px,0) scale(.97)!important;
+  pointer-events:none!important;
+}
+
+/* Progress fills and budget indicators should glide, not jump. */
+.progress > span,
+.budget-bar > span,
+.goal-progress > span,
+[class*="progress"] > i{
+  transition:
+    width var(--motion-slow) var(--ease-ios),
+    transform var(--motion-slow) var(--ease-ios)!important;
+}
+
+/* Privacy button and icon controls get a tiny spatial response. */
+.icon-btn,
+.circle-link,
+#privacyToggle{
+  transition:
+    transform var(--motion-base) var(--ease-ios-spring),
+    background-color var(--motion-base) ease,
+    opacity var(--motion-fast) ease!important;
+}
+.icon-btn:active,
+.circle-link:active,
+#privacyToggle:active{
+  transform:scale(.92)!important;
+}
+
+/* Better scrolling feel for horizontal controls. */
+.forecast-range-tabs,
+.pill-tabs,
+.segmented{
+  scroll-behavior:smooth;
+}
+
+/* Avoid accidental jank from animating paint-heavy effects. */
+.bottom-nav,
+.sheet,
+.sheet-panel,
+.topbar{
+  animation-name:none;
+}
+
+/* The user-selected "minimal" profile remains genuinely minimal. */
+html[data-motion="minimal"] *,
+html[data-motion="minimal"] *::before,
+html[data-motion="minimal"] *::after{
+  animation-duration:1ms!important;
+  transition-duration:1ms!important;
+}
+
+/* iPhone 16 Pro Max: slightly longer spring travel looks natural on the tall display. */
+@media (min-width:432px) and (max-width:448px) and (orientation:portrait){
+  body > .bottom-nav .nav-item.active .nav-icon{
+    transform:translate3d(0,-2px,0) scale(1.05)!important;
+  }
+}
+
+/* Respect iOS accessibility settings. */
+@media (prefers-reduced-motion:reduce){
+  .sheet,
+  .sheet-panel,
+  .toast,
+  #main,
+  body > .bottom-nav .nav-item,
+  body > .bottom-nav #fab{
+    will-change:auto!important;
+  }
+}
+
+
+/* =========================================================
+   V6.3 — Plan metrics clarity
+   Forecast metrics explain their period; actual month facts
+   are visually separated from future forecast.
+   ========================================================= */
+
+.plan-kpis .kpi{
+  display:flex!important;
+  flex-direction:column!important;
+  min-height:92px!important;
+}
+
+.plan-kpis .kpi small{
+  white-space:normal!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  min-height:25px;
+  line-height:1.28!important;
+}
+
+.plan-kpis .kpi strong{
+  margin-top:auto!important;
+}
+
+.kpi-note{
+  display:block;
+  margin-top:5px;
+  color:rgba(181,193,212,.46);
+  font-size:7.7px;
+  line-height:1.28;
+  white-space:normal;
+}
+
+.plan-fact-block{
+  margin:9px 2px 13px;
+  padding:13px;
+  border:1px solid rgba(255,255,255,.06);
+  border-radius:18px;
+  background:rgba(255,255,255,.017);
+}
+
+.plan-fact-head{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:10px;
+}
+
+.plan-fact-head > div small{
+  display:block;
+  color:rgba(181,193,212,.50);
+  font-size:8px;
+  margin-bottom:2px;
+}
+
+.plan-fact-head > div strong{
+  font-size:13px;
+  font-weight:670;
+  letter-spacing:-.025em;
+}
+
+.plan-fact-head > span{
+  color:rgba(181,193,212,.40);
+  font-size:7.5px;
+  text-align:right;
+}
+
+.plan-fact-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+}
+
+.plan-fact-item{
+  min-width:0;
+  padding:11px 10px;
+  border-radius:15px;
+  background:rgba(255,255,255,.022);
+  border:1px solid rgba(255,255,255,.045);
+}
+
+.plan-fact-item small{
+  display:block;
+  min-height:22px;
+  color:rgba(196,206,222,.58);
+  font-size:8.3px;
+  line-height:1.3;
+}
+
+.plan-fact-item strong{
+  display:block;
+  margin-top:4px;
+  font-size:18px;
+  line-height:1.12;
+  letter-spacing:-.045em;
+  font-variant-numeric:tabular-nums;
+}
+
+.plan-fact-item span{
+  display:block;
+  margin-top:5px;
+  color:rgba(181,193,212,.43);
+  font-size:7.5px;
+  line-height:1.32;
+}
+
+@media (min-width:432px) and (max-width:448px) and (orientation:portrait){
+  .plan-kpis .kpi{
+    min-height:96px!important;
+    padding:11px 9px!important;
+  }
+  .plan-kpis .kpi small{font-size:9px!important}
+  .kpi-note{font-size:7.8px}
+  .plan-fact-item strong{font-size:19px}
+}

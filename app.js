@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '6.0.0';
+const APP_VERSION = '6.3.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -137,7 +137,7 @@ function restoreViewState(tab=activeTab){
 }
 function motionProfile(){
   const key=state?.settings?.animationSpeed||'smooth';
-  return ({slow:{factor:1.55,label:'Очень плавно'},smooth:{factor:1.25,label:'Плавно'},normal:{factor:1,label:'Стандарт'},fast:{factor:.72,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.25,label:'Плавно'};
+  return ({slow:{factor:1.42,label:'Очень плавно'},smooth:{factor:1.16,label:'Плавно'},normal:{factor:.96,label:'Стандарт'},fast:{factor:.70,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.16,label:'Плавно'};
 }
 function motionMs(base){
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return 1;
@@ -151,12 +151,12 @@ function applyUISettings(){
   root.dataset.accent=state.settings.accent||'blue';
   root.dataset.dashboard=state.settings.dashboardMode||'standard';
   root.style.setProperty('--motion-factor',String(factor));
-  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(90*factor))}ms`);
-  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(145*factor))}ms`);
-  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(210*factor))}ms`);
-  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(330*factor))}ms`);
-  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(330*factor))}ms`);
-  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(360*factor))}ms`);
+  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(82*factor))}ms`);
+  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(138*factor))}ms`);
+  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(225*factor))}ms`);
+  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(365*factor))}ms`);
+  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(380*factor))}ms`);
+  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(410*factor))}ms`);
 }
 
 
@@ -816,7 +816,10 @@ function svgLine(data,{interactive=false,height='normal'}={}){
   if(!data.length || data.every(d=>!Number.isFinite(Number(d.value)))) return '<div class="chart-empty">Пока недостаточно данных</div>';
   const id=`chart-${uid()}`;
   chartRegistry.set(id,data);
-  const w=680,h=230,pl=56,pr=18,pt=16,pb=34;
+  // V6.1: chart coordinate system matches the actual iPhone portrait aspect.
+  // The old 680×230 canvas was stretched into a tall mobile container,
+  // which distorted SVG text and pushed X labels into the KPI cards.
+  const w=400,h=260,pl=46,pr=12,pt=16,pb=46;
   const vals=data.map(d=>Number(d.value)||0);
   let rawMin=Math.min(...vals), rawMax=Math.max(...vals);
   const rawRange=Math.max(1, rawMax-rawMin);
@@ -836,13 +839,13 @@ function svgLine(data,{interactive=false,height='normal'}={}){
   const path=pts.map((q,i)=>`${i?'L':'M'} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join(' ');
   const area=`${path} L ${pts.at(-1).x.toFixed(1)} ${h-pb} L ${pts[0].x.toFixed(1)} ${h-pb} Z`;
   const yTicks=[max,max-step,max-2*step].filter((v,i,a)=>i===a.findIndex(x=>x===v));
-  const grid=yTicks.map(v=>`<g><line class="chart-grid" x1="${pl}" y1="${yFor(v)}" x2="${w-pr}" y2="${yFor(v)}"/><text class="chart-y-label" x="${pl-8}" y="${yFor(v)+3}" text-anchor="end">${esc(compactMoney(v))}</text></g>`).join('');
+  const grid=yTicks.map(v=>`<g><line class="chart-grid" x1="${pl}" y1="${yFor(v)}" x2="${w-pr}" y2="${yFor(v)}"/><text class="chart-y-label chart-axis-y" x="${pl-8}" y="${yFor(v)+3.5}" text-anchor="end" dominant-baseline="middle">${esc(compactMoney(v))}</text></g>`).join('');
   const stride=Math.max(1,Math.ceil((data.length-1)/5));
-  const labels=pts.map((q,i)=>((i===0||i===pts.length-1||i%stride===0)&&q.label)?`<text class="chart-label" x="${q.x}" y="${h-8}" text-anchor="middle">${esc(q.label)}</text>`:'').join('');
+  const labels=pts.map((q,i)=>((i===0||i===pts.length-1||i%stride===0)&&q.label)?`<text class="chart-label chart-axis-x" x="${q.x}" y="${h-15}" text-anchor="middle" dominant-baseline="middle">${esc(q.label)}</text>`:'').join('');
   const zero=min<0&&max>0?`<line class="chart-zero" x1="${pl}" y1="${yFor(0)}" x2="${w-pr}" y2="${yFor(0)}"/>`:'';
   const dots=pts.map(q=>`<circle class="${q.events?.length?'chart-dot chart-event-dot':'chart-dot'}" cx="${q.x}" cy="${q.y}" r="${q.events?.length?4.2:2.8}"></circle>`).join('');
-  return `<div class="chart-shell ${interactive?'interactive-chart':''} chart-${height}" data-chart-id="${id}">
-    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="График">
+  return `<div class="chart-shell ${interactive?'interactive-chart':''} chart-${height}" data-chart-id="${id}" data-points="${data.length}">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" aria-label="График">
       <defs><linearGradient id="areaGrad-${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8cff" stop-opacity=".30"/><stop offset="1" stop-color="#5b8cff" stop-opacity="0"/></linearGradient></defs>
       ${grid}${zero}<path class="chart-area" style="fill:url(#areaGrad-${id})" d="${area}"/><path class="chart-line" d="${path}"/>${dots}${labels}
       ${interactive?`<line class="chart-cursor hidden" x1="${pl}" y1="${pt}" x2="${pl}" y2="${h-pb}"/><circle class="chart-cursor-dot hidden" cx="${pl}" cy="${pt}" r="5"/>`:''}
@@ -1062,17 +1065,18 @@ function animateMainSurface(mode='refresh',direction=0){
   }
 
   const isTab=mode==='tab';
-  const distance=isTab ? Math.max(7,Math.min(12,window.innerWidth*.022)) : 4;
-  const x=isTab ? direction*distance : 0;
+  const x=isTab ? direction*Math.max(9,Math.min(16,window.innerWidth*.03)) : 0;
+  const y=isTab ? 1.5 : 5;
 
   main._motion=main.animate(
     [
-      {opacity:isTab?.72:.88, transform:`translate3d(${x}px,${isTab?0:3}px,0)`},
-      {opacity:1, transform:'translate3d(0,0,0)'}
+      {opacity:isTab?.48:.74, transform:`translate3d(${x}px,${y}px,0) scale(.997)`},
+      {opacity:.94, offset:.72, transform:'translate3d(0,0,0) scale(1.001)'},
+      {opacity:1, transform:'translate3d(0,0,0) scale(1)'}
     ],
     {
-      duration:motionMs(isTab?390:190),
-      easing:'cubic-bezier(.16,.82,.22,1)',
+      duration:motionMs(isTab?390:245),
+      easing:'cubic-bezier(.18,.82,.18,1)',
       fill:'both'
     }
   );
@@ -1084,6 +1088,64 @@ function animateMainSurface(mode='refresh',direction=0){
     main.style.opacity='';
     main.style.transform='';
   };
+}
+
+function animateContentStagger(root=$('#main')){
+  if(!root || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const candidates=[
+    ...root.querySelectorAll(':scope > section, :scope > .hero, :scope > .section, :scope > .clean-surface')
+  ].filter((el,i,arr)=>arr.indexOf(el)===i).slice(0,10);
+
+  candidates.forEach((el,index)=>{
+    if(el.dataset.motionEntered==='1') return;
+    el.dataset.motionEntered='1';
+    const delay=Math.min(index*26,130);
+    el.animate(
+      [
+        {opacity:.01,transform:'translate3d(0,9px,0) scale(.997)'},
+        {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
+      ],
+      {
+        duration:motionMs(360),
+        delay:motionMs(delay),
+        easing:'cubic-bezier(.16,.84,.20,1)',
+        fill:'backwards'
+      }
+    );
+  });
+}
+
+function animateSheetContent(sheet){
+  if(!sheet || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const items=[...sheet.children].filter(el=>!el.classList.contains('sheet-handle')).slice(0,12);
+  items.forEach((el,index)=>{
+    el.animate(
+      [
+        {opacity:0,transform:'translate3d(0,8px,0)'},
+        {opacity:1,transform:'translate3d(0,0,0)'}
+      ],
+      {
+        duration:motionMs(300),
+        delay:motionMs(70+index*22),
+        easing:'cubic-bezier(.16,.84,.20,1)',
+        fill:'backwards'
+      }
+    );
+  });
+}
+
+function animatePageChrome(){
+  const title=$('#pageTitle');
+  if(title && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    title.animate(
+      [
+        {opacity:.35,transform:'translate3d(0,4px,0)'},
+        {opacity:1,transform:'translate3d(0,0,0)'}
+      ],
+      {duration:motionMs(260),easing:'cubic-bezier(.18,.82,.2,1)'}
+    );
+  }
 }
 
 function animateLocalSurface(el){
@@ -1142,7 +1204,7 @@ function bindSwipeRows(){
     const end=e=>{
       if(e.pointerId!==id)return;
       id=null;
-      row.style.transition=`transform ${motionMs(280)}ms cubic-bezier(.2,.8,.2,1)`;
+      row.style.transition=`transform ${motionMs(320)}ms cubic-bezier(.16,.86,.18,1)`;
       const tx=state.transactions.find(t=>t.id===row.dataset.tx);
       if(dx<-58 && tx){
         row.style.transform='translateX(-110%)';
@@ -1210,6 +1272,7 @@ function animateChartsOnView(root=$('#main')){
 
 function enhanceRenderedUI(){
   installPressFeedback($('#main'));
+  animateContentStagger($('#main'));
   animateNumberElements($('#main'));
   animateChartsOnView($('#main'));
   if(activeTab==='transactions') bindSwipeRows();
@@ -1220,6 +1283,17 @@ function showToast(msg,actionLabel=null,action=null){
   undoAction=typeof action==='function'?action:null;
   el.innerHTML=`<span>${esc(msg)}</span>${actionLabel&&undoAction?`<button id="toastAction" type="button">${esc(actionLabel)}</button>`:''}`;
   el.classList.remove('hidden');
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    try{el._toastMotion?.cancel()}catch(_){}
+    el._toastMotion=el.animate(
+      [
+        {opacity:0,transform:'translate3d(-50%,12px,0) scale(.965)'},
+        {opacity:1,transform:'translate3d(-50%,-2px,0) scale(1.004)',offset:.72},
+        {opacity:1,transform:'translate3d(-50%,0,0) scale(1)'}
+      ],
+      {duration:motionMs(320),easing:'cubic-bezier(.16,.84,.18,1)'}
+    );
+  }
   clearTimeout(toastTimer);
   const actionBtn=$('#toastAction');
   if(actionBtn) actionBtn.onclick=async()=>{const fn=undoAction;undoAction=null;el.classList.add('hidden');if(fn)await fn()};
@@ -1239,7 +1313,7 @@ function render({motion='refresh',direction=0}={}){
   chartRegistry.clear();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
   updateNavGlider();
-  const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title);
+  const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title); animatePageChrome();
   if(activeTab==='overview') renderOverview();
   if(activeTab==='transactions') renderTransactions();
   if(activeTab==='plan') renderPlan();
@@ -1491,13 +1565,31 @@ function planForecastHTML(){
   const health=forecastHealth(forecast.series);
   const start=totalBalance();
   const change=final-start;
+  const monthFact=monthTotals();
+  const monthName=new Intl.DateTimeFormat('ru-RU',{month:'long'}).format(new Date());
+  const monthNameCap=monthName.charAt(0).toUpperCase()+monthName.slice(1);
   const deficitRows=forecast.series.slice(1).map((r,index)=>({...r,index:index+1,net:(Number(r.income)||0)-(Number(r.expense)||0),shortfall:Math.max(0,(Number(r.expense)||0)-(Number(r.income)||0))})).filter(r=>r.shortfall>.005);
   const analysis=planAlgorithmAnalysis(forecast,health);
   return `<div class="chart plan-chart">${svgLine(forecast.series,{interactive:true,height:'large'})}</div>
     <div class="grid-3 plan-kpis">
-      <div class="kpi"><small>Через ${planForecastRange} мес.</small><strong class="${final>=start?'positive':'negative'}">${fmtMajor(final)}</strong></div>
-      <div class="kpi"><small>Минимум</small><strong class="${health.min>=0?'positive':'negative'}">${fmtMajor(health.min)}</strong></div>
-      <div class="kpi"><small>Изменение</small><strong class="${change>=0?'positive':'negative'}">${fmtMajor(change,true)}</strong></div>
+      <div class="kpi"><small>Капитал через ${planForecastRange} мес.</small><strong class="${final>=start?'positive':'negative'}">${fmtMajor(final)}</strong><span class="kpi-note">прогноз на выбранный период</span></div>
+      <div class="kpi"><small>Минимум за ${planForecastRange} мес.</small><strong class="${health.min>=0?'positive':'negative'}">${fmtMajor(health.min)}</strong><span class="kpi-note">самая низкая точка прогноза</span></div>
+      <div class="kpi"><small>Изменение за ${planForecastRange} мес.</small><strong class="${change>=0?'positive':'negative'}">${fmtMajor(change,true)}</strong><span class="kpi-note">${fmtMajor(start)} → ${fmtMajor(final)}</span></div>
+    </div>
+    <div class="plan-fact-block">
+      <div class="plan-fact-head"><div><small>Фактически в этом месяце</small><strong>${esc(monthNameCap)}</strong></div><span>по проведённым операциям</span></div>
+      <div class="plan-fact-grid">
+        <div class="plan-fact-item">
+          <small>Изменение накоплений</small>
+          <strong class="${monthFact.net>=0?'positive':'negative'}">${fmtMajor(monthFact.net,true)}</strong>
+          <span>доходы ${fmtMajor(monthFact.income)} − расходы ${fmtMajor(monthFact.expense)}</span>
+        </div>
+        <div class="plan-fact-item">
+          <small>Ушло за месяц</small>
+          <strong class="${monthFact.expense>0?'negative':''}">${fmtMajor(monthFact.expense)}</strong>
+          <span>фактические расходы за ${esc(monthName)}</span>
+        </div>
+      </div>
     </div>
     ${health.cashflow.required>0?`<div class="plan-advice warning ${uiMemory.planExplain?'open':''}">
       <div class="plan-advice-head">
@@ -1960,11 +2052,16 @@ function openSheet(html){
   sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"></div>${html}`;
   sheet.classList.remove('hidden'); backdrop.classList.remove('hidden');
   document.body.classList.add('sheet-open');
-  requestAnimationFrame(()=>{sheet.classList.add('sheet-visible');backdrop.classList.add('sheet-visible');installPressFeedback(sheet)});
+  requestAnimationFrame(()=>{
+    sheet.classList.add('sheet-visible');
+    backdrop.classList.add('sheet-visible');
+    installPressFeedback(sheet);
+    animateSheetContent(sheet);
+  });
   $$('.sheet-close').forEach(b=>b.onclick=closeSheet);
   const handle=$('.sheet-handle',sheet);
   let pointerId=null,startY=0,lastY=0,startT=0,lastT=0;
-  const reset=()=>{sheet.style.transition=`transform ${motionMs(340)}ms cubic-bezier(.18,.86,.24,1)`;sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',motionMs(350))};
+  const reset=()=>{sheet.style.transition=`transform ${motionMs(390)}ms cubic-bezier(.16,.88,.18,1)`;sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',motionMs(400))};
   if(handle){
     handle.addEventListener('pointerdown',e=>{pointerId=e.pointerId;startY=lastY=e.clientY;startT=lastT=performance.now();try{handle.setPointerCapture(e.pointerId)}catch(_){};sheet.style.transition='none'}, {passive:true});
     handle.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;lastY=e.clientY;lastT=performance.now();const dy=Math.max(0,lastY-startY);const resisted=dy<180?dy:180+(dy-180)*.55;sheet.style.transform=`translateX(-50%) translateY(${resisted}px)`;backdrop.style.opacity=String(Math.max(.18,1-dy/390))}, {passive:true});

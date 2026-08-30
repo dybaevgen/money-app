@@ -4003,15 +4003,6 @@ body > .bottom-nav .nav-item .nav-icon{
   transition-timing-function:var(--spring-v71)!important;
 }
 
-.main-transition-ghost-v71{
-  box-sizing:border-box!important;
-  background:var(--bg)!important;
-  backface-visibility:hidden!important;
-  -webkit-font-smoothing:antialiased!important;
-  transform-origin:center center!important;
-  contain:paint!important;
-}
-
 /* Remove old micro-snaps that survived from earlier generations. */
 .card,
 .clean-surface,
@@ -4054,5 +4045,4 @@ button:not(.is-pressed),
 }
 
 @media (prefers-reduced-motion:reduce){
-  .main-transition-ghost-v71{display:none!important}
 }

@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '7.1.0';
+const APP_VERSION = '7.1.1';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -1163,78 +1163,41 @@ function animateLocalSurface(el){
   );
 }
 
-function createTabTransitionGhost(){
+function animateTabSwap(direction){
   const main=$('#main');
-  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
-  const rect=main.getBoundingClientRect();
-  if(rect.width<1 || rect.height<1) return null;
+  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-  const ghost=main.cloneNode(true);
-  ghost.removeAttribute('id');
-  ghost.classList.add('main-transition-ghost','main-transition-ghost-v71');
-  ghost.setAttribute('aria-hidden','true');
-  ghost.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
-  ghost.querySelectorAll('button,input,select,textarea,a').forEach(el=>el.setAttribute('tabindex','-1'));
-
-  const visibleHeight=Math.max(0,window.innerHeight-Math.max(0,rect.top));
-  Object.assign(ghost.style,{
-    position:'fixed',
-    left:`${rect.left}px`,
-    top:`${Math.max(0,rect.top)}px`,
-    width:`${rect.width}px`,
-    height:`${visibleHeight}px`,
-    margin:'0',
-    overflow:'hidden',
-    pointerEvents:'none',
-    zIndex:'18'
-  });
-  document.body.appendChild(ghost);
-  return ghost;
-}
-
-function animateTabSwap(ghost,direction){
-  const main=$('#main');
-  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches){ghost?.remove();return}
-
-  const duration=motionMs(555);
-  const travel=Math.max(10,Math.min(18,window.innerWidth*.035));
+  // V7.1.1: never keep the previous page on screen. The destination page is
+  // rendered immediately and only it receives a very small, fully opaque
+  // settling motion. This preserves iOS-like continuity without a ghost/crossfade.
+  const duration=motionMs(430);
+  const travel=Math.max(5,Math.min(9,window.innerWidth*.018));
   const enterX=direction*travel;
-  const exitX=-direction*travel*.72;
 
   if(main._motion){try{main._motion.cancel()}catch(_){}main._motion=null}
   const incoming=main.animate([
-    {opacity:.18,transform:`translate3d(${enterX}px,1px,0) scale(.9968)`},
-    {opacity:.72,offset:.46,transform:`translate3d(${enterX*.28}px,0,0) scale(.9992)`},
+    {opacity:1,transform:`translate3d(${enterX}px,2px,0) scale(.9988)`},
+    {opacity:1,offset:.58,transform:`translate3d(${enterX*.20}px,.4px,0) scale(.9997)`},
     {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
   ],{
     duration,
-    easing:'cubic-bezier(.20,.68,.18,1)',
+    easing:'cubic-bezier(.18,.78,.20,1)',
     fill:'both'
   });
   main._motion=incoming;
 
-  let outgoing=null;
-  if(ghost){
-    outgoing=ghost.animate([
-      {opacity:1,transform:'translate3d(0,0,0) scale(1)'},
-      {opacity:.60,offset:.48,transform:`translate3d(${exitX*.35}px,0,0) scale(.9987)`},
-      {opacity:0,transform:`translate3d(${exitX}px,0,0) scale(.996)`}
-    ],{
-      duration:motionMs(470),
-      easing:'cubic-bezier(.22,.62,.20,1)',
-      fill:'both'
-    });
-  }
-
   const finish=()=>{
     if(main._motion===incoming) main._motion=null;
     try{incoming.cancel()}catch(_){}
-    main.style.opacity='';main.style.transform='';
-    ghost?.remove();
+    main.style.opacity='';
+    main.style.transform='';
   };
   incoming.onfinish=finish;
-  incoming.oncancel=()=>ghost?.remove();
-  if(outgoing) outgoing.oncancel=()=>ghost?.remove();
+  incoming.oncancel=()=>{
+    if(main._motion===incoming) main._motion=null;
+    main.style.opacity='';
+    main.style.transform='';
+  };
 }
 
 function switchTab(next){
@@ -1246,7 +1209,6 @@ function switchTab(next){
   const oldIndex=tabIndex(activeTab);
   const newIndex=tabIndex(next);
   const direction=newIndex>=oldIndex?1:-1;
-  const ghost=createTabTransitionGhost();
 
   activeTab=next;
   window.scrollTo(0,0);
@@ -1254,7 +1216,7 @@ function switchTab(next){
   document.body.scrollTop=0;
   render({motion:'none',direction});
   animatePageChrome();
-  requestAnimationFrame(()=>animateTabSwap(ghost,direction));
+  requestAnimationFrame(()=>animateTabSwap(direction));
 }
 
 function installPressFeedback(root=document){

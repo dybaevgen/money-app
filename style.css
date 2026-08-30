@@ -3913,3 +3913,146 @@ body.sheet-gesture-active #app,
 body.sheet-gesture-active #sheetBackdrop{
   transition:none!important;
 }
+
+/* =========================================================
+   V7.1 — Softer iOS Motion + deterministic elastic scroll edges
+   This block is intentionally last: it neutralizes older sharp timing rules.
+   ========================================================= */
+
+:root{
+  --ease-v71:cubic-bezier(.20,.68,.18,1);
+  --spring-v71:cubic-bezier(.18,.72,.16,1);
+  --dismiss-v71:cubic-bezier(.24,.66,.12,1);
+}
+
+/* The sheet is now a shell. The inner content owns scrolling. This makes the
+   edge state deterministic and lets the rubber-band effect appear reliably. */
+body.sheet-open{
+  overflow:hidden!important;
+  overscroll-behavior:none!important;
+  touch-action:auto!important;
+}
+
+#sheet.sheet{
+  display:flex!important;
+  flex-direction:column!important;
+  overflow:hidden!important;
+  overscroll-behavior:none!important;
+  touch-action:pan-y!important;
+  max-height:calc(100dvh - max(8px,env(safe-area-inset-top)))!important;
+  padding:9px 16px 0!important;
+  transform:translate3d(-50%,105%,0)!important;
+  transition:
+    transform var(--sheet-runtime-duration,var(--sheet-duration)) var(--sheet-runtime-ease,var(--spring-v71)),
+    opacity var(--motion-base) ease!important;
+}
+
+#sheet.sheet.sheet-visible{
+  transform:translate3d(-50%,0,0)!important;
+}
+
+#sheet.sheet.sheet-visible.sheet-gesture-active{
+  transform:translate3d(-50%,var(--sheet-gesture-y,0px),0)!important;
+  transition:none!important;
+}
+
+#sheet .sheet-handle{
+  flex:0 0 20px!important;
+  margin:-1px auto 4px!important;
+}
+
+#sheet .sheet-content{
+  flex:1 1 auto!important;
+  min-height:0!important;
+  max-height:calc(100dvh - max(8px,env(safe-area-inset-top)) - 31px)!important;
+  overflow-x:hidden!important;
+  overflow-y:auto!important;
+  overscroll-behavior-y:none!important;
+  -webkit-overflow-scrolling:touch!important;
+  touch-action:pan-y!important;
+  scrollbar-width:none!important;
+  padding-bottom:calc(20px + env(safe-area-inset-bottom))!important;
+  transform:translate3d(0,0,0);
+}
+#sheet .sheet-content::-webkit-scrollbar{display:none!important}
+#sheet .sheet-content.sheet-content-rubber{will-change:transform!important}
+
+/* V7.1 uses long, low-acceleration settles. Transform and opacity only. */
+#sheet.sheet,
+.sheet-panel{
+  transition-timing-function:var(--spring-v71)!important;
+}
+#sheetBackdrop.sheet-backdrop{
+  transition:opacity var(--motion-base) cubic-bezier(.22,.62,.22,1)!important;
+}
+
+body.sheet-open #app,
+body:not(.sheet-open) #app{
+  transition:
+    transform var(--sheet-duration) var(--spring-v71),
+    opacity var(--motion-base) cubic-bezier(.22,.62,.22,1)!important;
+}
+
+/* Tab navigation: the glider and icons arrive together with the page crossfade. */
+body > .bottom-nav .nav-glider{
+  transition:transform var(--tab-duration) var(--spring-v71)!important;
+}
+body > .bottom-nav .nav-item,
+body > .bottom-nav .nav-item .nav-icon{
+  transition-duration:var(--motion-base)!important;
+  transition-timing-function:var(--spring-v71)!important;
+}
+
+.main-transition-ghost-v71{
+  box-sizing:border-box!important;
+  background:var(--bg)!important;
+  backface-visibility:hidden!important;
+  -webkit-font-smoothing:antialiased!important;
+  transform-origin:center center!important;
+  contain:paint!important;
+}
+
+/* Remove old micro-snaps that survived from earlier generations. */
+.card,
+.clean-surface,
+.list-surface,
+.account-item,
+.tx-item,
+.plan-item,
+.timeline-item,
+.goal-overview,
+.budget-overview,
+.inbox-item,
+.settings-row,
+.primary-btn,
+.secondary-btn,
+.danger-btn,
+.choice-chip,
+.filter-chip,
+.segmented button,
+.forecast-range-tabs button,
+.pill-tabs button{
+  transition-duration:var(--motion-base)!important;
+  transition-timing-function:var(--ease-v71)!important;
+}
+
+/* Press begins immediately but release is deliberately softer. */
+button.is-pressed,
+[role="button"].is-pressed{
+  transition-duration:var(--motion-instant)!important;
+}
+button:not(.is-pressed),
+[role="button"]:not(.is-pressed){
+  transition-timing-function:var(--ease-v71)!important;
+}
+
+.sheet-handle span{
+  transition:
+    width var(--motion-base) var(--spring-v71),
+    background-color var(--motion-base) ease,
+    transform var(--motion-base) var(--spring-v71)!important;
+}
+
+@media (prefers-reduced-motion:reduce){
+  .main-transition-ghost-v71{display:none!important}
+}

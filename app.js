@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '7.0.0';
+const APP_VERSION = '7.1.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -139,9 +139,10 @@ function restoreViewState(tab=activeTab){
 }
 function motionProfile(){
   const key=state?.settings?.animationSpeed||'smooth';
-  // V7 is tuned around iOS-style responsiveness: fast reaction first,
-  // then a longer spring settle. "Smooth" is the native-feeling baseline.
-  return ({slow:{factor:1.24,label:'Очень плавно'},smooth:{factor:1.00,label:'Плавно'},normal:{factor:.86,label:'Стандарт'},fast:{factor:.68,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.00,label:'Плавно'};
+  // V7.1 deliberately gives the eye more time to follow movement. The press
+  // response stays quick, while navigation, sheets and spring returns settle
+  // over a longer iOS-like curve instead of snapping into place.
+  return ({slow:{factor:1.28,label:'Очень плавно'},smooth:{factor:1.00,label:'Плавно'},normal:{factor:.84,label:'Стандарт'},fast:{factor:.68,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.00,label:'Плавно'};
 }
 function motionMs(base){
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return 1;
@@ -155,12 +156,12 @@ function applyUISettings(){
   root.dataset.accent=state.settings.accent||'blue';
   root.dataset.dashboard=state.settings.dashboardMode||'standard';
   root.style.setProperty('--motion-factor',String(factor));
-  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(72*factor))}ms`);
-  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(125*factor))}ms`);
-  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(205*factor))}ms`);
-  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(335*factor))}ms`);
-  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(320*factor))}ms`);
-  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(430*factor))}ms`);
+  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(86*factor))}ms`);
+  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(178*factor))}ms`);
+  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(305*factor))}ms`);
+  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(490*factor))}ms`);
+  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(555*factor))}ms`);
+  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(610*factor))}ms`);
 }
 
 
@@ -1069,18 +1070,18 @@ function animateMainSurface(mode='refresh',direction=0){
   }
 
   const isTab=mode==='tab';
-  const x=isTab ? direction*Math.max(6,Math.min(11,window.innerWidth*.022)) : 0;
-  const y=isTab ? 1 : 3;
+  const x=isTab ? direction*Math.max(8,Math.min(14,window.innerWidth*.028)) : 0;
+  const y=isTab ? 1 : 4;
 
   main._motion=main.animate(
     [
-      {opacity:isTab?.78:.88, transform:`translate3d(${x}px,${y}px,0) scale(.9985)`},
-      {opacity:.985, offset:.78, transform:'translate3d(0,0,0) scale(1.0006)'},
+      {opacity:isTab?.62:.84, transform:`translate3d(${x}px,${y}px,0) scale(.9975)`},
+      {opacity:.94, offset:.56, transform:`translate3d(${x*.18}px,0,0) scale(.9994)`},
       {opacity:1, transform:'translate3d(0,0,0) scale(1)'}
     ],
     {
-      duration:motionMs(isTab?315:205),
-      easing:'cubic-bezier(.16,.82,.18,1)',
+      duration:motionMs(isTab?520:335),
+      easing:'cubic-bezier(.20,.68,.18,1)',
       fill:'both'
     }
   );
@@ -1104,16 +1105,16 @@ function animateContentStagger(root=$('#main')){
   candidates.forEach((el,index)=>{
     if(el.dataset.motionEntered==='1') return;
     el.dataset.motionEntered='1';
-    const delay=Math.min(index*11,55);
+    const delay=Math.min(index*18,90);
     el.animate(
       [
-        {opacity:.72,transform:'translate3d(0,4px,0) scale(.999)'},
+        {opacity:.84,transform:'translate3d(0,7px,0) scale(.9988)'},
         {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
       ],
       {
-        duration:motionMs(230),
+        duration:motionMs(390),
         delay:motionMs(delay),
-        easing:'cubic-bezier(.16,.84,.20,1)',
+        easing:'cubic-bezier(.20,.70,.18,1)',
         fill:'backwards'
       }
     );
@@ -1127,13 +1128,14 @@ function animateSheetContent(sheet){
   if(content._enterMotion) try{content._enterMotion.cancel()}catch(_){}
   content._enterMotion=content.animate(
     [
-      {opacity:.72,transform:'translate3d(0,5px,0) scale(.999)'},
+      {opacity:.86,transform:'translate3d(0,9px,0) scale(.9985)'},
+      {opacity:.97,offset:.58,transform:'translate3d(0,2px,0) scale(.9997)'},
       {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
     ],
     {
-      duration:motionMs(245),
-      delay:motionMs(38),
-      easing:'cubic-bezier(.16,.84,.20,1)',
+      duration:motionMs(430),
+      delay:motionMs(72),
+      easing:'cubic-bezier(.20,.68,.18,1)',
       fill:'backwards'
     }
   );
@@ -1147,7 +1149,7 @@ function animatePageChrome(){
         {opacity:.35,transform:'translate3d(0,4px,0)'},
         {opacity:1,transform:'translate3d(0,0,0)'}
       ],
-      {duration:motionMs(260),easing:'cubic-bezier(.18,.82,.2,1)'}
+      {duration:motionMs(410),easing:'cubic-bezier(.20,.70,.18,1)'}
     );
   }
 }
@@ -1157,8 +1159,82 @@ function animateLocalSurface(el){
   if(el._motion) try{el._motion.cancel()}catch(_){}
   el._motion=el.animate(
     [{opacity:.78,transform:'translate3d(0,3px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],
-    {duration:motionMs(190),easing:'cubic-bezier(.18,.75,.22,1)'}
+    {duration:motionMs(320),easing:'cubic-bezier(.20,.68,.18,1)'}
   );
+}
+
+function createTabTransitionGhost(){
+  const main=$('#main');
+  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+  const rect=main.getBoundingClientRect();
+  if(rect.width<1 || rect.height<1) return null;
+
+  const ghost=main.cloneNode(true);
+  ghost.removeAttribute('id');
+  ghost.classList.add('main-transition-ghost','main-transition-ghost-v71');
+  ghost.setAttribute('aria-hidden','true');
+  ghost.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
+  ghost.querySelectorAll('button,input,select,textarea,a').forEach(el=>el.setAttribute('tabindex','-1'));
+
+  const visibleHeight=Math.max(0,window.innerHeight-Math.max(0,rect.top));
+  Object.assign(ghost.style,{
+    position:'fixed',
+    left:`${rect.left}px`,
+    top:`${Math.max(0,rect.top)}px`,
+    width:`${rect.width}px`,
+    height:`${visibleHeight}px`,
+    margin:'0',
+    overflow:'hidden',
+    pointerEvents:'none',
+    zIndex:'18'
+  });
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function animateTabSwap(ghost,direction){
+  const main=$('#main');
+  if(!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches){ghost?.remove();return}
+
+  const duration=motionMs(555);
+  const travel=Math.max(10,Math.min(18,window.innerWidth*.035));
+  const enterX=direction*travel;
+  const exitX=-direction*travel*.72;
+
+  if(main._motion){try{main._motion.cancel()}catch(_){}main._motion=null}
+  const incoming=main.animate([
+    {opacity:.18,transform:`translate3d(${enterX}px,1px,0) scale(.9968)`},
+    {opacity:.72,offset:.46,transform:`translate3d(${enterX*.28}px,0,0) scale(.9992)`},
+    {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
+  ],{
+    duration,
+    easing:'cubic-bezier(.20,.68,.18,1)',
+    fill:'both'
+  });
+  main._motion=incoming;
+
+  let outgoing=null;
+  if(ghost){
+    outgoing=ghost.animate([
+      {opacity:1,transform:'translate3d(0,0,0) scale(1)'},
+      {opacity:.60,offset:.48,transform:`translate3d(${exitX*.35}px,0,0) scale(.9987)`},
+      {opacity:0,transform:`translate3d(${exitX}px,0,0) scale(.996)`}
+    ],{
+      duration:motionMs(470),
+      easing:'cubic-bezier(.22,.62,.20,1)',
+      fill:'both'
+    });
+  }
+
+  const finish=()=>{
+    if(main._motion===incoming) main._motion=null;
+    try{incoming.cancel()}catch(_){}
+    main.style.opacity='';main.style.transform='';
+    ghost?.remove();
+  };
+  incoming.onfinish=finish;
+  incoming.oncancel=()=>ghost?.remove();
+  if(outgoing) outgoing.oncancel=()=>ghost?.remove();
 }
 
 function switchTab(next){
@@ -1170,14 +1246,15 @@ function switchTab(next){
   const oldIndex=tabIndex(activeTab);
   const newIndex=tabIndex(next);
   const direction=newIndex>=oldIndex?1:-1;
+  const ghost=createTabTransitionGhost();
 
-  // Every tab always opens from the top. We deliberately do not restore
-  // the previous scroll coordinate for primary navigation.
   activeTab=next;
   window.scrollTo(0,0);
   document.documentElement.scrollTop=0;
   document.body.scrollTop=0;
-  render({motion:'tab',direction});
+  render({motion:'none',direction});
+  animatePageChrome();
+  requestAnimationFrame(()=>animateTabSwap(ghost,direction));
 }
 
 function installPressFeedback(root=document){
@@ -1295,7 +1372,7 @@ function showToast(msg,actionLabel=null,action=null){
         {opacity:1,transform:'translate3d(-50%,-2px,0) scale(1.004)',offset:.72},
         {opacity:1,transform:'translate3d(-50%,0,0) scale(1)'}
       ],
-      {duration:motionMs(320),easing:'cubic-bezier(.16,.84,.18,1)'}
+      {duration:motionMs(440),easing:'cubic-bezier(.20,.70,.18,1)'}
     );
   }
   clearTimeout(toastTimer);
@@ -1317,7 +1394,7 @@ function render({motion='refresh',direction=0}={}){
   chartRegistry.clear();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
   updateNavGlider();
-  const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title); animatePageChrome();
+  const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title); if(motion!=='none')animatePageChrome();
   if(activeTab==='overview') renderOverview();
   if(activeTab==='transactions') renderTransactions();
   if(activeTab==='plan') renderPlan();
@@ -2049,15 +2126,17 @@ function bindCommonActions(){
   const forceUpdate=$('[data-action="force-update"]'); if(forceUpdate)forceUpdate.onclick=()=>forceAppUpdate(forceUpdate);
 }
 
-function rubberBandDistance(distance, limit=96){
+function iosRubberBand(distance,dimension=320,constant=.55){
   const sign=distance<0?-1:1;
-  const d=Math.abs(distance);
-  return sign*limit*(1-Math.exp(-d/limit));
+  const d=Math.abs(Number(distance)||0);
+  const dim=Math.max(120,Number(dimension)||320);
+  return sign*((d*dim*constant)/(dim+constant*d));
 }
 
 function sheetDragDistance(distance){
-  const d=Math.max(0,distance);
-  return d<=132 ? d*.88 : 116+(d-132)*.34;
+  const d=Math.max(0,Number(distance)||0);
+  if(d<=110)return d*.94;
+  return 103.4+iosRubberBand(d-110,360,.34);
 }
 
 function cancelMotion(animation){
@@ -2068,80 +2147,105 @@ function cancelMotion(animation){
 function installSheetPhysics(sheet,backdrop){
   if(sheetMotionCleanup){sheetMotionCleanup();sheetMotionCleanup=null}
 
-  const content=$('.sheet-content',sheet);
+  const scroller=$('.sheet-content',sheet);
   const app=$('#app');
-  if(!content)return;
+  if(!scroller)return;
 
-  let startY=0,lastY=0,startT=0,lastT=0,lastVelocity=0;
+  let startY=0,lastY=0,lastT=0,lastVelocity=0;
   let mode='';
+  let modeStartY=0;
   let offset=0;
   let tracking=false;
   let ignored=false;
-  let sheetSpring=null,contentSpring=null,backdropSpring=null;
+  let settleAnimation=null;
+  let settleTimer=null;
 
   const ignoreTarget=target=>target instanceof Element && Boolean(target.closest(
     'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell'
   ));
 
+  const maxScroll=()=>Math.max(0,scroller.scrollHeight-scroller.clientHeight);
+  const atTop=()=>scroller.scrollTop<=.75;
+  const atBottom=()=>scroller.scrollTop>=maxScroll()-.75;
+  const scrollable=()=>maxScroll()>1.5;
+
+  const stopSettle=()=>{
+    cancelMotion(settleAnimation);settleAnimation=null;
+    if(settleTimer){clearTimeout(settleTimer);settleTimer=null}
+  };
+
   const clearInline=()=>{
+    stopSettle();
     sheet.style.removeProperty('--sheet-gesture-y');
     sheet.style.removeProperty('--sheet-runtime-duration');
     sheet.style.removeProperty('--sheet-runtime-ease');
-    content.style.transform='';
-    content.style.transformOrigin='';
+    scroller.style.transform='';
+    scroller.style.transformOrigin='';
+    scroller.style.willChange='';
     backdrop.style.opacity='';
     if(app){
       app.style.removeProperty('--app-sheet-scale');
       app.style.removeProperty('--app-sheet-opacity');
     }
     sheet.classList.remove('sheet-gesture-active','sheet-rubber-active');
+    scroller.classList.remove('sheet-content-rubber');
     document.body.classList.remove('sheet-gesture-active');
-    content.classList.remove('sheet-content-rubber');
   };
 
-  const stopAnimations=()=>{
-    cancelMotion(sheetSpring);cancelMotion(contentSpring);cancelMotion(backdropSpring);
-    sheetSpring=contentSpring=backdropSpring=null;
-  };
-
-  const animateRest=(kind,current)=>{
-    stopAnimations();
-    const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const duration=reduce?1:motionMs(kind==='sheet-down'?410:360);
-    const easing='cubic-bezier(.14,.88,.18,1)';
-
-    if(kind==='sheet-down'||kind==='sheet-up'){
-      sheet.style.setProperty('--sheet-runtime-duration',`${duration}ms`);
-      sheet.style.setProperty('--sheet-runtime-ease',easing);
-      requestAnimationFrame(()=>{
-        sheet.style.setProperty('--sheet-gesture-y','0px');
-        backdrop.style.opacity='1';
-        if(app){
-          app.style.setProperty('--app-sheet-scale','.988');
-          app.style.setProperty('--app-sheet-opacity','.93');
-        }
-      });
-      sheetSpring={cancel(){}};
-      setTimeout(clearInline,duration+28);
-      return;
+  const activate=(nextMode,y,previousY)=>{
+    mode=nextMode;
+    // If the finger reaches an edge during an already-running scroll, start
+    // the elastic distance from the previous frame. This prevents a jump.
+    modeStartY=previousY ?? y;
+    offset=0;
+    sheet.classList.add('sheet-gesture-active');
+    document.body.classList.add('sheet-gesture-active');
+    if(nextMode.startsWith('rubber')){
+      sheet.classList.add('sheet-rubber-active');
+      scroller.classList.add('sheet-content-rubber');
+      scroller.style.willChange='transform';
     }
+  };
 
-    const overshoot=current<0?2:-2;
-    contentSpring=content.animate([
-      {transform:`translate3d(0,${current}px,0)`},
-      {transform:`translate3d(0,${overshoot}px,0)`,offset:.78},
-      {transform:'translate3d(0,0,0)'}
-    ],{duration,easing,fill:'both'});
-    contentSpring.onfinish=clearInline;
-    contentSpring.oncancel=()=>{};
+  const springScrollerBack=current=>{
+    stopSettle();
+    if(Math.abs(current)<.5){clearInline();return}
+    const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const duration=reduce?1:motionMs(560);
+    const opposite=current<0?Math.min(4.5,Math.abs(current)*.09):-Math.min(4.5,Math.abs(current)*.09);
+    scroller.style.transform='';
+    settleAnimation=scroller.animate([
+      {transform:`translate3d(0,${current}px,0)`,offset:0,easing:'cubic-bezier(.18,.70,.16,1)'},
+      {transform:`translate3d(0,${opposite}px,0)`,offset:.76,easing:'cubic-bezier(.24,.62,.24,1)'},
+      {transform:'translate3d(0,0,0)',offset:1}
+    ],{duration,fill:'both'});
+    settleAnimation.onfinish=clearInline;
+    settleAnimation.oncancel=()=>{};
+  };
+
+  const springSheetBack=current=>{
+    stopSettle();
+    const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const duration=reduce?1:motionMs(545);
+    sheet.style.setProperty('--sheet-runtime-duration',`${duration}ms`);
+    sheet.style.setProperty('--sheet-runtime-ease','cubic-bezier(.18,.72,.16,1)');
+    requestAnimationFrame(()=>{
+      sheet.style.setProperty('--sheet-gesture-y','0px');
+      backdrop.style.opacity='1';
+      if(app){
+        app.style.setProperty('--app-sheet-scale','.988');
+        app.style.setProperty('--app-sheet-opacity','.93');
+      }
+    });
+    settleTimer=setTimeout(clearInline,duration+42);
   };
 
   const onTouchStart=e=>{
     if(e.touches.length!==1)return;
-    stopAnimations();
+    stopSettle();
     const touch=e.touches[0];
     startY=lastY=touch.clientY;
-    startT=lastT=performance.now();
+    lastT=performance.now();
     lastVelocity=0;offset=0;mode='';tracking=true;
     ignored=ignoreTarget(e.target);
   };
@@ -2151,60 +2255,69 @@ function installSheetPhysics(sheet,backdrop){
     const touch=e.touches[0];
     const y=touch.clientY;
     const now=performance.now();
-    const dy=y-startY;
+    const totalDy=y-startY;
     const frameDy=y-lastY;
     const frameDt=Math.max(1,now-lastT);
     const velocity=frameDy/frameDt;
-    lastVelocity=lastVelocity*.62+velocity*.38;
+    lastVelocity=lastVelocity*.68+velocity*.32;
+    const previousY=lastY;
     lastY=y;lastT=now;
 
-    const maxScroll=Math.max(0,sheet.scrollHeight-sheet.clientHeight);
-    const atTop=sheet.scrollTop<=.5;
-    const atBottom=sheet.scrollTop>=maxScroll-.5;
-    const notScrollable=maxScroll<1.5;
-
     if(!mode){
-      if(Math.abs(dy)<6)return;
-      if(atTop&&dy>0) mode='sheet-down';
-      else if(notScrollable&&dy<0) mode='sheet-up';
-      else if(atBottom&&dy<0) mode='rubber-bottom';
-      else return;
+      if(Math.abs(totalDy)<5)return;
 
-      sheet.classList.add('sheet-gesture-active');
-      document.body.classList.add('sheet-gesture-active');
+      if(atTop() && totalDy>0){
+        activate('sheet-down',y,startY);
+      }else if(atBottom() && frameDy<0){
+        activate('rubber-bottom',y,previousY);
+      }else if(!scrollable() && totalDy<0){
+        activate('rubber-up',y,startY);
+      }else{
+        // Native momentum scrolling continues until a real edge is reached.
+        return;
+      }
     }
 
+    const edgeDy=y-modeStartY;
+
     if(mode==='sheet-down'){
-      if(dy<0){mode='';clearInline();return}
+      if(edgeDy<0){
+        offset=0;
+        sheet.style.setProperty('--sheet-gesture-y','0px');
+        return;
+      }
       e.preventDefault();
-      offset=sheetDragDistance(dy);
+      offset=sheetDragDistance(edgeDy);
       const progress=Math.min(1,offset/330);
       sheet.style.setProperty('--sheet-gesture-y',`${offset}px`);
-      backdrop.style.opacity=String(Math.max(.16,1-progress*.86));
+      backdrop.style.opacity=String(Math.max(.14,1-progress*.86));
       if(app){
-        const scale=.988+progress*.012;
-        app.style.setProperty('--app-sheet-scale',String(scale));
+        app.style.setProperty('--app-sheet-scale',String(.988+progress*.012));
         app.style.setProperty('--app-sheet-opacity',String(.93+progress*.07));
       }
       return;
     }
 
-    if(mode==='sheet-up'){
-      if(dy>0){mode='';clearInline();return}
+    if(mode==='rubber-up'){
+      if(edgeDy>0){offset=0;sheet.style.setProperty('--sheet-gesture-y','0px');return}
       e.preventDefault();
-      offset=rubberBandDistance(dy,34);
+      offset=iosRubberBand(edgeDy,260,.44);
       sheet.style.setProperty('--sheet-gesture-y',`${offset}px`);
-      backdrop.style.opacity=String(Math.max(.88,1-Math.abs(offset)/260));
+      backdrop.style.opacity=String(Math.max(.90,1-Math.abs(offset)/300));
       return;
     }
 
     if(mode==='rubber-bottom'){
-      if(!atBottom&&dy>=0){mode='';clearInline();return}
+      if(edgeDy>0){
+        offset=0;
+        scroller.style.transform='translate3d(0,0,0)';
+        return;
+      }
       e.preventDefault();
-      offset=rubberBandDistance(dy,82);
-      content.classList.add('sheet-content-rubber');
-      content.style.transformOrigin='center bottom';
-      content.style.transform=`translate3d(0,${offset}px,0)`;
+      offset=iosRubberBand(edgeDy,300,.55);
+      scroller.style.transformOrigin='center bottom';
+      scroller.style.transform=`translate3d(0,${offset}px,0)`;
+      return;
     }
   };
 
@@ -2214,17 +2327,23 @@ function installSheetPhysics(sheet,backdrop){
     if(ignored){ignored=false;return}
     const currentMode=mode;
     mode='';
-    if(!currentMode){clearInline();return}
+    if(!currentMode){return}
 
     if(currentMode==='sheet-down'){
-      const fastFlick=lastVelocity>.72;
-      const farEnough=offset>96;
+      const fastFlick=lastVelocity>.78;
+      const farEnough=offset>112;
       if(!cancelled&&(fastFlick||farEnough)){
         closeSheet({gestureVelocity:lastVelocity,gestureOffset:offset});
-      }else animateRest('sheet-down',offset);
+      }else springSheetBack(offset);
       return;
     }
-    animateRest(currentMode,offset);
+
+    if(currentMode==='rubber-up'){
+      springSheetBack(offset);
+      return;
+    }
+
+    springScrollerBack(offset);
   };
 
   const onTouchEnd=()=>finish(false);
@@ -2235,7 +2354,6 @@ function installSheetPhysics(sheet,backdrop){
   sheet.addEventListener('touchend',onTouchEnd,{passive:true});
   sheet.addEventListener('touchcancel',onTouchCancel,{passive:true});
 
-  // The handle has a larger invisible hit area, like an iOS grabber.
   const handle=$('.sheet-handle',sheet);
   if(handle){
     handle.addEventListener('pointerdown',()=>sheet.classList.add('sheet-handle-active'),{passive:true});
@@ -2243,7 +2361,7 @@ function installSheetPhysics(sheet,backdrop){
   }
 
   sheetMotionCleanup=(preserveVisual=false)=>{
-    stopAnimations();
+    stopSettle();
     sheet.removeEventListener('touchstart',onTouchStart);
     sheet.removeEventListener('touchmove',onTouchMove);
     sheet.removeEventListener('touchend',onTouchEnd);
@@ -2268,7 +2386,8 @@ function openSheet(html){
   sheet.style.removeProperty('--sheet-runtime-ease');
   backdrop.style.opacity='';
   sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"><span></span></div><div class="sheet-content">${html}</div>`;
-  sheet.scrollTop=0;
+  const sheetScroller=$('.sheet-content',sheet);
+  if(sheetScroller)sheetScroller.scrollTop=0;
   sheet.classList.remove('hidden');
   backdrop.classList.remove('hidden');
   document.body.classList.add('sheet-open');
@@ -2291,7 +2410,7 @@ function openSheet(html){
     if(auto && !window.matchMedia('(pointer: fine)').matches) {
       try{auto.focus({preventScroll:true})}catch(_){auto.focus()}
     }
-  },motionMs(445));
+  },motionMs(635));
 }
 
 function closeSheet(options={}){
@@ -2309,10 +2428,10 @@ function closeSheet(options={}){
   }
 
   const remaining=Math.max(120,window.innerHeight-gestureOffset);
-  const velocityDuration=velocity>0?remaining/Math.max(.85,velocity):340;
-  const duration=motionMs(Math.max(205,Math.min(340,velocityDuration)));
+  const velocityDuration=velocity>0?remaining/Math.max(.88,velocity):430;
+  const duration=motionMs(Math.max(290,Math.min(470,velocityDuration)));
   sheet.style.setProperty('--sheet-runtime-duration',`${duration}ms`);
-  sheet.style.setProperty('--sheet-runtime-ease','cubic-bezier(.32,.72,0,1)');
+  sheet.style.setProperty('--sheet-runtime-ease','cubic-bezier(.24,.66,.12,1)');
 
   // Commit the finger position before switching the CSS variable back to the
   // off-screen state. This keeps a flick perfectly continuous.

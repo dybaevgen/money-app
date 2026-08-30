@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '6.3.1';
+const APP_VERSION = '7.0.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -111,6 +111,7 @@ let planScenario = { extraIncome:0, extraExpense:0, oneTimeExpense:0, oneTimeMon
 let calendarCursor = new Date(new Date().getFullYear(),new Date().getMonth(),1,12);
 let toastTimer = null;
 let sheetCloseTimer = null;
+let sheetMotionCleanup = null;
 const chartRegistry = new Map();
 let chartEntranceObserver = null;
 const UI_STORAGE_KEY = 'money-ui-v4';
@@ -138,7 +139,9 @@ function restoreViewState(tab=activeTab){
 }
 function motionProfile(){
   const key=state?.settings?.animationSpeed||'smooth';
-  return ({slow:{factor:1.42,label:'Очень плавно'},smooth:{factor:1.16,label:'Плавно'},normal:{factor:.96,label:'Стандарт'},fast:{factor:.70,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.16,label:'Плавно'};
+  // V7 is tuned around iOS-style responsiveness: fast reaction first,
+  // then a longer spring settle. "Smooth" is the native-feeling baseline.
+  return ({slow:{factor:1.24,label:'Очень плавно'},smooth:{factor:1.00,label:'Плавно'},normal:{factor:.86,label:'Стандарт'},fast:{factor:.68,label:'Быстро'},minimal:{factor:.05,label:'Минимум'}})[key]||{factor:1.00,label:'Плавно'};
 }
 function motionMs(base){
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return 1;
@@ -152,12 +155,12 @@ function applyUISettings(){
   root.dataset.accent=state.settings.accent||'blue';
   root.dataset.dashboard=state.settings.dashboardMode||'standard';
   root.style.setProperty('--motion-factor',String(factor));
-  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(82*factor))}ms`);
-  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(138*factor))}ms`);
-  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(225*factor))}ms`);
-  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(365*factor))}ms`);
-  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(380*factor))}ms`);
-  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(410*factor))}ms`);
+  root.style.setProperty('--motion-instant',`${Math.max(1,Math.round(72*factor))}ms`);
+  root.style.setProperty('--motion-fast',`${Math.max(1,Math.round(125*factor))}ms`);
+  root.style.setProperty('--motion-base',`${Math.max(1,Math.round(205*factor))}ms`);
+  root.style.setProperty('--motion-slow',`${Math.max(1,Math.round(335*factor))}ms`);
+  root.style.setProperty('--tab-duration',`${Math.max(1,Math.round(320*factor))}ms`);
+  root.style.setProperty('--sheet-duration',`${Math.max(1,Math.round(430*factor))}ms`);
 }
 
 
@@ -1066,18 +1069,18 @@ function animateMainSurface(mode='refresh',direction=0){
   }
 
   const isTab=mode==='tab';
-  const x=isTab ? direction*Math.max(9,Math.min(16,window.innerWidth*.03)) : 0;
-  const y=isTab ? 1.5 : 5;
+  const x=isTab ? direction*Math.max(6,Math.min(11,window.innerWidth*.022)) : 0;
+  const y=isTab ? 1 : 3;
 
   main._motion=main.animate(
     [
-      {opacity:isTab?.48:.74, transform:`translate3d(${x}px,${y}px,0) scale(.997)`},
-      {opacity:.94, offset:.72, transform:'translate3d(0,0,0) scale(1.001)'},
+      {opacity:isTab?.78:.88, transform:`translate3d(${x}px,${y}px,0) scale(.9985)`},
+      {opacity:.985, offset:.78, transform:'translate3d(0,0,0) scale(1.0006)'},
       {opacity:1, transform:'translate3d(0,0,0) scale(1)'}
     ],
     {
-      duration:motionMs(isTab?390:245),
-      easing:'cubic-bezier(.18,.82,.18,1)',
+      duration:motionMs(isTab?315:205),
+      easing:'cubic-bezier(.16,.82,.18,1)',
       fill:'both'
     }
   );
@@ -1101,14 +1104,14 @@ function animateContentStagger(root=$('#main')){
   candidates.forEach((el,index)=>{
     if(el.dataset.motionEntered==='1') return;
     el.dataset.motionEntered='1';
-    const delay=Math.min(index*26,130);
+    const delay=Math.min(index*11,55);
     el.animate(
       [
-        {opacity:.01,transform:'translate3d(0,9px,0) scale(.997)'},
+        {opacity:.72,transform:'translate3d(0,4px,0) scale(.999)'},
         {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
       ],
       {
-        duration:motionMs(360),
+        duration:motionMs(230),
         delay:motionMs(delay),
         easing:'cubic-bezier(.16,.84,.20,1)',
         fill:'backwards'
@@ -1119,21 +1122,21 @@ function animateContentStagger(root=$('#main')){
 
 function animateSheetContent(sheet){
   if(!sheet || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const items=[...sheet.children].filter(el=>!el.classList.contains('sheet-handle')).slice(0,12);
-  items.forEach((el,index)=>{
-    el.animate(
-      [
-        {opacity:0,transform:'translate3d(0,8px,0)'},
-        {opacity:1,transform:'translate3d(0,0,0)'}
-      ],
-      {
-        duration:motionMs(300),
-        delay:motionMs(70+index*22),
-        easing:'cubic-bezier(.16,.84,.20,1)',
-        fill:'backwards'
-      }
-    );
-  });
+  const content=$('.sheet-content',sheet);
+  if(!content) return;
+  if(content._enterMotion) try{content._enterMotion.cancel()}catch(_){}
+  content._enterMotion=content.animate(
+    [
+      {opacity:.72,transform:'translate3d(0,5px,0) scale(.999)'},
+      {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
+    ],
+    {
+      duration:motionMs(245),
+      delay:motionMs(38),
+      easing:'cubic-bezier(.16,.84,.20,1)',
+      fill:'backwards'
+    }
+  );
 }
 
 function animatePageChrome(){
@@ -2046,65 +2049,291 @@ function bindCommonActions(){
   const forceUpdate=$('[data-action="force-update"]'); if(forceUpdate)forceUpdate.onclick=()=>forceAppUpdate(forceUpdate);
 }
 
+function rubberBandDistance(distance, limit=96){
+  const sign=distance<0?-1:1;
+  const d=Math.abs(distance);
+  return sign*limit*(1-Math.exp(-d/limit));
+}
+
+function sheetDragDistance(distance){
+  const d=Math.max(0,distance);
+  return d<=132 ? d*.88 : 116+(d-132)*.34;
+}
+
+function cancelMotion(animation){
+  if(!animation)return;
+  try{animation.cancel()}catch(_){}
+}
+
+function installSheetPhysics(sheet,backdrop){
+  if(sheetMotionCleanup){sheetMotionCleanup();sheetMotionCleanup=null}
+
+  const content=$('.sheet-content',sheet);
+  const app=$('#app');
+  if(!content)return;
+
+  let startY=0,lastY=0,startT=0,lastT=0,lastVelocity=0;
+  let mode='';
+  let offset=0;
+  let tracking=false;
+  let ignored=false;
+  let sheetSpring=null,contentSpring=null,backdropSpring=null;
+
+  const ignoreTarget=target=>target instanceof Element && Boolean(target.closest(
+    'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell'
+  ));
+
+  const clearInline=()=>{
+    sheet.style.removeProperty('--sheet-gesture-y');
+    sheet.style.removeProperty('--sheet-runtime-duration');
+    sheet.style.removeProperty('--sheet-runtime-ease');
+    content.style.transform='';
+    content.style.transformOrigin='';
+    backdrop.style.opacity='';
+    if(app){
+      app.style.removeProperty('--app-sheet-scale');
+      app.style.removeProperty('--app-sheet-opacity');
+    }
+    sheet.classList.remove('sheet-gesture-active','sheet-rubber-active');
+    document.body.classList.remove('sheet-gesture-active');
+    content.classList.remove('sheet-content-rubber');
+  };
+
+  const stopAnimations=()=>{
+    cancelMotion(sheetSpring);cancelMotion(contentSpring);cancelMotion(backdropSpring);
+    sheetSpring=contentSpring=backdropSpring=null;
+  };
+
+  const animateRest=(kind,current)=>{
+    stopAnimations();
+    const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const duration=reduce?1:motionMs(kind==='sheet-down'?410:360);
+    const easing='cubic-bezier(.14,.88,.18,1)';
+
+    if(kind==='sheet-down'||kind==='sheet-up'){
+      sheet.style.setProperty('--sheet-runtime-duration',`${duration}ms`);
+      sheet.style.setProperty('--sheet-runtime-ease',easing);
+      requestAnimationFrame(()=>{
+        sheet.style.setProperty('--sheet-gesture-y','0px');
+        backdrop.style.opacity='1';
+        if(app){
+          app.style.setProperty('--app-sheet-scale','.988');
+          app.style.setProperty('--app-sheet-opacity','.93');
+        }
+      });
+      sheetSpring={cancel(){}};
+      setTimeout(clearInline,duration+28);
+      return;
+    }
+
+    const overshoot=current<0?2:-2;
+    contentSpring=content.animate([
+      {transform:`translate3d(0,${current}px,0)`},
+      {transform:`translate3d(0,${overshoot}px,0)`,offset:.78},
+      {transform:'translate3d(0,0,0)'}
+    ],{duration,easing,fill:'both'});
+    contentSpring.onfinish=clearInline;
+    contentSpring.oncancel=()=>{};
+  };
+
+  const onTouchStart=e=>{
+    if(e.touches.length!==1)return;
+    stopAnimations();
+    const touch=e.touches[0];
+    startY=lastY=touch.clientY;
+    startT=lastT=performance.now();
+    lastVelocity=0;offset=0;mode='';tracking=true;
+    ignored=ignoreTarget(e.target);
+  };
+
+  const onTouchMove=e=>{
+    if(!tracking||ignored||e.touches.length!==1)return;
+    const touch=e.touches[0];
+    const y=touch.clientY;
+    const now=performance.now();
+    const dy=y-startY;
+    const frameDy=y-lastY;
+    const frameDt=Math.max(1,now-lastT);
+    const velocity=frameDy/frameDt;
+    lastVelocity=lastVelocity*.62+velocity*.38;
+    lastY=y;lastT=now;
+
+    const maxScroll=Math.max(0,sheet.scrollHeight-sheet.clientHeight);
+    const atTop=sheet.scrollTop<=.5;
+    const atBottom=sheet.scrollTop>=maxScroll-.5;
+    const notScrollable=maxScroll<1.5;
+
+    if(!mode){
+      if(Math.abs(dy)<6)return;
+      if(atTop&&dy>0) mode='sheet-down';
+      else if(notScrollable&&dy<0) mode='sheet-up';
+      else if(atBottom&&dy<0) mode='rubber-bottom';
+      else return;
+
+      sheet.classList.add('sheet-gesture-active');
+      document.body.classList.add('sheet-gesture-active');
+    }
+
+    if(mode==='sheet-down'){
+      if(dy<0){mode='';clearInline();return}
+      e.preventDefault();
+      offset=sheetDragDistance(dy);
+      const progress=Math.min(1,offset/330);
+      sheet.style.setProperty('--sheet-gesture-y',`${offset}px`);
+      backdrop.style.opacity=String(Math.max(.16,1-progress*.86));
+      if(app){
+        const scale=.988+progress*.012;
+        app.style.setProperty('--app-sheet-scale',String(scale));
+        app.style.setProperty('--app-sheet-opacity',String(.93+progress*.07));
+      }
+      return;
+    }
+
+    if(mode==='sheet-up'){
+      if(dy>0){mode='';clearInline();return}
+      e.preventDefault();
+      offset=rubberBandDistance(dy,34);
+      sheet.style.setProperty('--sheet-gesture-y',`${offset}px`);
+      backdrop.style.opacity=String(Math.max(.88,1-Math.abs(offset)/260));
+      return;
+    }
+
+    if(mode==='rubber-bottom'){
+      if(!atBottom&&dy>=0){mode='';clearInline();return}
+      e.preventDefault();
+      offset=rubberBandDistance(dy,82);
+      content.classList.add('sheet-content-rubber');
+      content.style.transformOrigin='center bottom';
+      content.style.transform=`translate3d(0,${offset}px,0)`;
+    }
+  };
+
+  const finish=cancelled=>{
+    if(!tracking)return;
+    tracking=false;
+    if(ignored){ignored=false;return}
+    const currentMode=mode;
+    mode='';
+    if(!currentMode){clearInline();return}
+
+    if(currentMode==='sheet-down'){
+      const fastFlick=lastVelocity>.72;
+      const farEnough=offset>96;
+      if(!cancelled&&(fastFlick||farEnough)){
+        closeSheet({gestureVelocity:lastVelocity,gestureOffset:offset});
+      }else animateRest('sheet-down',offset);
+      return;
+    }
+    animateRest(currentMode,offset);
+  };
+
+  const onTouchEnd=()=>finish(false);
+  const onTouchCancel=()=>finish(true);
+
+  sheet.addEventListener('touchstart',onTouchStart,{passive:true});
+  sheet.addEventListener('touchmove',onTouchMove,{passive:false});
+  sheet.addEventListener('touchend',onTouchEnd,{passive:true});
+  sheet.addEventListener('touchcancel',onTouchCancel,{passive:true});
+
+  // The handle has a larger invisible hit area, like an iOS grabber.
+  const handle=$('.sheet-handle',sheet);
+  if(handle){
+    handle.addEventListener('pointerdown',()=>sheet.classList.add('sheet-handle-active'),{passive:true});
+    ['pointerup','pointercancel','pointerleave'].forEach(name=>handle.addEventListener(name,()=>sheet.classList.remove('sheet-handle-active'),{passive:true}));
+  }
+
+  sheetMotionCleanup=(preserveVisual=false)=>{
+    stopAnimations();
+    sheet.removeEventListener('touchstart',onTouchStart);
+    sheet.removeEventListener('touchmove',onTouchMove);
+    sheet.removeEventListener('touchend',onTouchEnd);
+    sheet.removeEventListener('touchcancel',onTouchCancel);
+    if(!preserveVisual)clearInline();
+  };
+}
+
 function openSheet(html){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
   const wasOpen=!sheet.classList.contains('hidden');
   const previousFocus=wasOpen&&sheet._previousFocus?sheet._previousFocus:document.activeElement;
 
-  // A sheet can be replaced immediately by another sheet (for example,
-  // Calendar day -> Add plan). Cancel the previous closing callback so it
-  // cannot hide the newly opened form a fraction of a second later.
-  if(sheetCloseTimer){
-    clearTimeout(sheetCloseTimer);
-    sheetCloseTimer=null;
-  }
+  // Replacing one sheet with another must be atomic. A closing timer from the
+  // previous surface is never allowed to hide the new one.
+  if(sheetCloseTimer){clearTimeout(sheetCloseTimer);sheetCloseTimer=null}
+  if(sheetMotionCleanup){sheetMotionCleanup();sheetMotionCleanup=null}
 
   sheet._previousFocus=previousFocus;
-  sheet.style.transition='';
-  sheet.style.transform='';
+  sheet.style.removeProperty('--sheet-gesture-y');
+  sheet.style.removeProperty('--sheet-runtime-duration');
+  sheet.style.removeProperty('--sheet-runtime-ease');
   backdrop.style.opacity='';
-  sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"></div>${html}`;
-  sheet.classList.remove('hidden'); backdrop.classList.remove('hidden');
+  sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"><span></span></div><div class="sheet-content">${html}</div>`;
+  sheet.scrollTop=0;
+  sheet.classList.remove('hidden');
+  backdrop.classList.remove('hidden');
   document.body.classList.add('sheet-open');
-  requestAnimationFrame(()=>{
+
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
     sheet.classList.add('sheet-visible');
     backdrop.classList.add('sheet-visible');
     installPressFeedback(sheet);
+    installSheetPhysics(sheet,backdrop);
     animateSheetContent(sheet);
-  });
-  $$('.sheet-close').forEach(b=>b.onclick=closeSheet);
-  const handle=$('.sheet-handle',sheet);
-  let pointerId=null,startY=0,lastY=0,startT=0,lastT=0;
-  const reset=()=>{sheet.style.transition=`transform ${motionMs(390)}ms cubic-bezier(.16,.88,.18,1)`;sheet.style.transform='translateX(-50%) translateY(0)';backdrop.style.opacity='1';setTimeout(()=>sheet.style.transition='',motionMs(400))};
-  if(handle){
-    handle.addEventListener('pointerdown',e=>{pointerId=e.pointerId;startY=lastY=e.clientY;startT=lastT=performance.now();try{handle.setPointerCapture(e.pointerId)}catch(_){};sheet.style.transition='none'}, {passive:true});
-    handle.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;lastY=e.clientY;lastT=performance.now();const dy=Math.max(0,lastY-startY);const resisted=dy<180?dy:180+(dy-180)*.55;sheet.style.transform=`translateX(-50%) translateY(${resisted}px)`;backdrop.style.opacity=String(Math.max(.18,1-dy/390))}, {passive:true});
-    const end=e=>{if(pointerId!==e.pointerId)return;const dy=Math.max(0,lastY-startY);const velocity=dy/Math.max(1,lastT-startT);pointerId=null;if(dy>88||velocity>.75)closeSheet();else reset()};
-    handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
-  }
+  }));
+
+  $$('.sheet-close',sheet).forEach(b=>b.onclick=closeSheet);
+
+  // Let the sheet finish its entrance before the iOS keyboard changes the
+  // visual viewport. This removes a common PWA "jump" on quick-entry forms.
   setTimeout(()=>{
+    if(sheet.classList.contains('hidden'))return;
     const auto=sheet.querySelector('.quick-amount input, input[autofocus]');
-    if(auto && !window.matchMedia('(pointer: fine)').matches) auto.focus({preventScroll:true});
-  },motionMs(230));
+    if(auto && !window.matchMedia('(pointer: fine)').matches) {
+      try{auto.focus({preventScroll:true})}catch(_){auto.focus()}
+    }
+  },motionMs(445));
 }
-function closeSheet(){
+
+function closeSheet(options={}){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
   if(sheet.classList.contains('hidden')) return;
   const previousFocus=sheet._previousFocus;
+  const gestureOffset=Math.max(0,Number(options?.gestureOffset)||0);
+  const velocity=Math.max(0,Number(options?.gestureVelocity)||0);
 
-  if(sheetCloseTimer){
-    clearTimeout(sheetCloseTimer);
-    sheetCloseTimer=null;
+  if(sheetCloseTimer){clearTimeout(sheetCloseTimer);sheetCloseTimer=null}
+  if(sheetMotionCleanup){
+    // During an interactive dismissal keep the current visual position until
+    // the exit transition takes over; otherwise clean gesture state now.
+    sheetMotionCleanup(gestureOffset>0);sheetMotionCleanup=null;
   }
 
-  sheet.classList.remove('sheet-visible');backdrop.classList.remove('sheet-visible');
-  sheet.style.transform='translateX(-50%) translateY(105%)';backdrop.style.opacity='0';
+  const remaining=Math.max(120,window.innerHeight-gestureOffset);
+  const velocityDuration=velocity>0?remaining/Math.max(.85,velocity):340;
+  const duration=motionMs(Math.max(205,Math.min(340,velocityDuration)));
+  sheet.style.setProperty('--sheet-runtime-duration',`${duration}ms`);
+  sheet.style.setProperty('--sheet-runtime-ease','cubic-bezier(.32,.72,0,1)');
+
+  // Commit the finger position before switching the CSS variable back to the
+  // off-screen state. This keeps a flick perfectly continuous.
+  void sheet.offsetHeight;
+  document.body.classList.remove('sheet-gesture-active');
+  sheet.classList.remove('sheet-gesture-active','sheet-visible');
+  backdrop.classList.remove('sheet-visible');
   document.body.classList.remove('sheet-open');
+  backdrop.style.opacity='0';
+
   sheetCloseTimer=setTimeout(()=>{
-    sheet.classList.add('hidden');backdrop.classList.add('hidden');sheet.style.transform='';backdrop.style.opacity='';
+    sheet.classList.add('hidden');
+    backdrop.classList.add('hidden');
+    sheet.style.removeProperty('--sheet-gesture-y');
+    sheet.style.removeProperty('--sheet-runtime-duration');
+    sheet.style.removeProperty('--sheet-runtime-ease');
+    backdrop.style.opacity='';
+    sheet.innerHTML='';
     sheetCloseTimer=null;
     if(previousFocus && previousFocus.focus) try{previousFocus.focus({preventScroll:true})}catch(_){}
-  },motionMs(300));
+  },duration+24);
 }
 
 function categoryOptions(type,selected=''){

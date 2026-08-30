@@ -3668,3 +3668,248 @@ html[data-motion="minimal"] *::after{
   .kpi-note{font-size:7.8px}
   .plan-fact-item strong{font-size:19px}
 }
+
+
+/* =========================================================
+   V7.0 — Native Motion / Elastic Sheet Physics
+   iPhone-first interaction: responsive press, momentum scroll,
+   rubber-band edges, interactive sheet dismissal, minimal jank.
+   ========================================================= */
+
+:root{
+  --ease-v7:cubic-bezier(.16,.82,.18,1);
+  --spring-v7:cubic-bezier(.14,.88,.18,1);
+  --dismiss-v7:cubic-bezier(.32,.72,0,1);
+}
+
+/* The page should react immediately; no web-style smooth-scroll lag. */
+html,
+body{
+  scroll-behavior:auto!important;
+}
+
+/* Modal scroll view owns its motion while the page behind it is frozen. */
+body.sheet-open{
+  overflow:hidden!important;
+  overscroll-behavior:none!important;
+  touch-action:none;
+}
+
+/* Re-enable vertical touch handling inside the modal itself. */
+#sheet.sheet{
+  touch-action:pan-y!important;
+  overflow-x:hidden!important;
+  overflow-y:auto!important;
+  overscroll-behavior-y:auto!important;
+  -webkit-overflow-scrolling:touch!important;
+  scrollbar-width:none!important;
+  max-height:calc(100dvh - max(10px,env(safe-area-inset-top)))!important;
+  padding-top:9px!important;
+  transform:translate3d(-50%,105%,0)!important;
+  transition:
+    transform var(--sheet-duration) var(--spring-v7),
+    opacity var(--motion-base) ease!important;
+  will-change:auto!important;
+}
+
+#sheet.sheet::-webkit-scrollbar{display:none!important}
+
+#sheet.sheet.sheet-visible{
+  transform:translate3d(-50%,0,0)!important;
+  will-change:transform!important;
+}
+
+#sheet.sheet.sheet-gesture-active{
+  transition:none!important;
+  will-change:transform!important;
+}
+
+/* Content gets its own compositor layer only while it rubber-bands. */
+.sheet-content{
+  position:relative;
+  min-width:0;
+  transform:translate3d(0,0,0);
+  will-change:auto;
+}
+
+.sheet-content.sheet-content-rubber{
+  will-change:transform;
+  pointer-events:none;
+}
+
+/* Larger invisible grab target without making the visible handle chunky. */
+.sheet-handle{
+  position:relative!important;
+  width:56px!important;
+  height:18px!important;
+  margin:-2px auto 5px!important;
+  background:transparent!important;
+  border-radius:999px!important;
+  touch-action:pan-y!important;
+  cursor:grab!important;
+  display:grid!important;
+  place-items:center!important;
+  transition:transform var(--motion-fast) var(--ease-v7)!important;
+}
+
+.sheet-handle::before,
+.sheet-handle span{
+  content:"";
+  display:block;
+  width:36px;
+  height:4px;
+  border-radius:999px;
+  background:rgba(220,229,243,.27);
+  transition:
+    width var(--motion-fast) var(--ease-v7),
+    background-color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--ease-v7);
+}
+
+.sheet-handle span{position:absolute}
+.sheet-handle::before{visibility:hidden}
+.sheet-handle-active span,
+.sheet-handle:active span{
+  width:44px;
+  background:rgba(226,235,249,.38);
+  transform:scaleY(1.05);
+}
+
+/* Backdrop responds to the finger; blur itself remains static for Safari. */
+#sheetBackdrop.sheet-backdrop{
+  transition:opacity var(--motion-base) ease!important;
+  will-change:auto!important;
+}
+#sheetBackdrop.sheet-visible{will-change:opacity!important}
+
+/* The background settles rather than slowly zooming like a website modal. */
+body.sheet-open #app{
+  transform:scale(.988)!important;
+  opacity:.93!important;
+  transition:
+    transform var(--sheet-duration) var(--spring-v7),
+    opacity var(--motion-base) ease!important;
+  transform-origin:center top!important;
+}
+body:not(.sheet-open) #app{
+  transform:scale(1)!important;
+  opacity:1!important;
+  transition:
+    transform var(--sheet-duration) var(--spring-v7),
+    opacity var(--motion-base) ease!important;
+}
+
+/* V7 intentionally removes smooth scrolling from touch controls. iOS momentum
+   is smoother when CSS does not compete with the finger. */
+.forecast-range-tabs,
+.pill-tabs,
+.segmented,
+.choice-scroller,
+.filter-row,
+.saved-scenarios{
+  scroll-behavior:auto!important;
+  -webkit-overflow-scrolling:touch;
+}
+
+/* Faster reaction on press, longer settle on release. */
+button,
+[role="button"]{
+  transition-timing-function:var(--ease-v7)!important;
+}
+button.is-pressed,
+[role="button"].is-pressed{
+  transition-duration:var(--motion-instant)!important;
+}
+
+/* Native-feeling tab response: less travel, no exaggerated bounce. */
+body > .bottom-nav .nav-item,
+body > .bottom-nav .nav-item .nav-icon,
+body > .bottom-nav #fab{
+  transition-timing-function:var(--spring-v7)!important;
+}
+body > .bottom-nav .nav-item.active .nav-icon{
+  transform:translate3d(0,-1.5px,0) scale(1.035)!important;
+}
+
+/* Sheet form controls should not visually jump when keyboard focus arrives. */
+.sheet .field input,
+.sheet .field select,
+.sheet .field textarea,
+.sheet .tx-search,
+.sheet .scenario-grid input{
+  transform:none!important;
+}
+.sheet .field input:focus,
+.sheet .field select:focus,
+.sheet .field textarea:focus,
+.sheet .tx-search:focus,
+.sheet .scenario-grid input:focus{
+  transform:none!important;
+}
+
+/* Keep expensive compositor hints temporary. */
+.card,
+.clean-surface,
+.list-surface,
+.account-item,
+.tx-item,
+.plan-item,
+.timeline-item,
+.goal-overview,
+.budget-overview,
+.inbox-item,
+.settings-row{
+  will-change:auto!important;
+}
+
+/* A little more bottom breathing room means the last control can pass the
+   finger naturally instead of feeling pinned to the edge. */
+.sheet-content{
+  padding-bottom:2px;
+}
+
+@media (prefers-reduced-motion:reduce){
+  #sheet.sheet,
+  #sheetBackdrop.sheet-backdrop,
+  body.sheet-open #app,
+  body:not(.sheet-open) #app,
+  .sheet-content{
+    transition-duration:1ms!important;
+    animation-duration:1ms!important;
+  }
+}
+
+/* V7 internal motion correction: important historical transform rules are
+   routed through variables so interactive gestures can stay compositor-only. */
+body.sheet-open{touch-action:auto!important}
+
+#sheet.sheet{
+  --sheet-rest-y:105%;
+  --sheet-gesture-y:0px;
+  --sheet-runtime-duration:var(--sheet-duration);
+  --sheet-runtime-ease:var(--spring-v7);
+  transform:translate3d(-50%,var(--sheet-rest-y),0)!important;
+  transition:
+    transform var(--sheet-runtime-duration) var(--sheet-runtime-ease),
+    opacity var(--motion-base) ease!important;
+}
+#sheet.sheet.sheet-visible{
+  --sheet-rest-y:0px;
+  transform:translate3d(-50%,var(--sheet-rest-y),0)!important;
+}
+#sheet.sheet.sheet-visible.sheet-gesture-active{
+  transform:translate3d(-50%,var(--sheet-gesture-y),0)!important;
+}
+
+body.sheet-open #app{
+  --app-sheet-scale:.988;
+  --app-sheet-opacity:.93;
+  transform:scale(var(--app-sheet-scale))!important;
+  opacity:var(--app-sheet-opacity)!important;
+}
+
+/* Finger tracking must be 1:1; no transition is allowed to lag the gesture. */
+body.sheet-gesture-active #app,
+body.sheet-gesture-active #sheetBackdrop{
+  transition:none!important;
+}

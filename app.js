@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '6.3.0';
+const APP_VERSION = '6.3.1';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -110,6 +110,7 @@ let planForecastRange = 12;
 let planScenario = { extraIncome:0, extraExpense:0, oneTimeExpense:0, oneTimeMonth:3 };
 let calendarCursor = new Date(new Date().getFullYear(),new Date().getMonth(),1,12);
 let toastTimer = null;
+let sheetCloseTimer = null;
 const chartRegistry = new Map();
 let chartEntranceObserver = null;
 const UI_STORAGE_KEY = 'money-ui-v4';
@@ -781,7 +782,7 @@ function handleInboxAction(action){
   if(action==='open-review'){closeSheet();activeTab='transactions';txSearch='review:';render({motion:'none'});return}
   if(action==='open-budgets'){closeSheet();activeTab='plan';render({motion:'none'});setTimeout(()=>document.querySelector('[data-action="add-budget"]')?.scrollIntoView({behavior:'smooth',block:'center'}),100);return}
   if(action==='open-overdue'){closeSheet();activeTab='plan';render({motion:'none'});return}
-  if(action==='open-reconcile'){closeSheet();openAccountsManager();return}
+  if(action==='open-reconcile'){openAccountsManager();return}
   if(action==='open-duplicates'){openDuplicateSheet();return}
   if(action==='open-unusual'){const t=unusualExpense();if(t)openTransactionDetail(t);return}
   if(action==='explain-free')return openExplanation('free');
@@ -1669,7 +1670,7 @@ function openCalendarDay(iso){
   openSheet(`<div class="sheet-head"><h3>${esc(fmtDate(iso))}</h3><button class="sheet-close">×</button></div>${plans.length?`<div class="section-mini-title">План</div><div class="timeline list-surface">${plans.map(eventRow).join('')}</div>`:''}${txs.length?`<div class="section-mini-title">Факт</div><div class="tx-list list-surface">${txs.map(txRow).join('')}</div>`:''}${!plans.length&&!txs.length?'<div class="empty-inline"><strong>Событий нет</strong><span>На этот день ничего не запланировано и не записано.</span></div>':''}<button class="primary-btn" data-day-add-plan>Добавить план на этот день</button>`);
   $$('[data-complete-plan]').forEach(b=>b.onclick=e=>{e.stopPropagation();completePlannedOccurrence(b.dataset.completePlan,b.dataset.completeDate)});
   $$('[data-tx]').forEach(b=>b.onclick=()=>openTransactionDetail(state.transactions.find(t=>t.id===b.dataset.tx)));
-  $('[data-day-add-plan]')?.addEventListener('click',()=>{closeSheet();openPlanSheet(null,iso)});
+  $('[data-day-add-plan]')?.addEventListener('click',()=>openPlanSheet(null,iso));
 }
 function openSaveScenarioSheet(){
   openSheet(`<div class="sheet-head"><h3>Сохранить сценарий</h3><button class="sheet-close">×</button></div><form id="scenarioSave"><div class="field"><label>Название</label><input name="name" required maxlength="40" placeholder="Например: Переезд"></div><div class="notice">Сохранится только What-if сценарий. Реальные операции и план не изменятся.</div><button class="primary-btn">Сохранить</button></form>`);
@@ -2047,8 +2048,21 @@ function bindCommonActions(){
 
 function openSheet(html){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
-  const previousFocus=document.activeElement;
+  const wasOpen=!sheet.classList.contains('hidden');
+  const previousFocus=wasOpen&&sheet._previousFocus?sheet._previousFocus:document.activeElement;
+
+  // A sheet can be replaced immediately by another sheet (for example,
+  // Calendar day -> Add plan). Cancel the previous closing callback so it
+  // cannot hide the newly opened form a fraction of a second later.
+  if(sheetCloseTimer){
+    clearTimeout(sheetCloseTimer);
+    sheetCloseTimer=null;
+  }
+
   sheet._previousFocus=previousFocus;
+  sheet.style.transition='';
+  sheet.style.transform='';
+  backdrop.style.opacity='';
   sheet.innerHTML=`<div class="sheet-handle" aria-hidden="true"></div>${html}`;
   sheet.classList.remove('hidden'); backdrop.classList.remove('hidden');
   document.body.classList.add('sheet-open');
@@ -2077,11 +2091,18 @@ function closeSheet(){
   const sheet=$('#sheet'), backdrop=$('#sheetBackdrop');
   if(sheet.classList.contains('hidden')) return;
   const previousFocus=sheet._previousFocus;
+
+  if(sheetCloseTimer){
+    clearTimeout(sheetCloseTimer);
+    sheetCloseTimer=null;
+  }
+
   sheet.classList.remove('sheet-visible');backdrop.classList.remove('sheet-visible');
   sheet.style.transform='translateX(-50%) translateY(105%)';backdrop.style.opacity='0';
   document.body.classList.remove('sheet-open');
-  setTimeout(()=>{
+  sheetCloseTimer=setTimeout(()=>{
     sheet.classList.add('hidden');backdrop.classList.add('hidden');sheet.style.transform='';backdrop.style.opacity='';
+    sheetCloseTimer=null;
     if(previousFocus && previousFocus.focus) try{previousFocus.focus({preventScroll:true})}catch(_){}
   },motionMs(300));
 }
@@ -2350,9 +2371,9 @@ async function init(){
   const now=new Date(); $('#todayLabel').textContent=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(now);
   $('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye'); bindShell(); document.body.classList.add('app-loading'); render(); requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('app-loading')));
   if('serviceWorker' in navigator){
-    window.addEventListener('load',async()=>{
+    const registerServiceWorker=async()=>{
       try{
-        const reg=await navigator.serviceWorker.register('./service-worker.js?v=6.0.0',{updateViaCache:'none'});
+        const reg=await navigator.serviceWorker.register(`./service-worker.js?v=${APP_VERSION}`,{updateViaCache:'none'});
         await reg.update();
         if(reg.waiting){
           showToast('Доступна новая версия','Обновить',()=>{
@@ -2374,7 +2395,9 @@ async function init(){
           });
         });
       }catch(_){}
-    });
+    };
+    if(document.readyState==='complete') registerServiceWorker();
+    else window.addEventListener('load',registerServiceWorker,{once:true});
   }
 }
 

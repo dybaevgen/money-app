@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '7.1.1';
+const APP_VERSION = '8.0.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -64,7 +64,7 @@ function accountGlyph(type){
 }
 
 const defaultState = () => ({
-  version: 6,
+  version: 8,
   settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
@@ -98,7 +98,14 @@ const defaultState = () => ({
   planCompletions: [],
   budgets: [],
   goals: [],
-  scenarios: []
+  scenarios: [],
+  workspace:'personal',
+  business:{
+    settings:{name:'Бизнес',cardOpening:0,cashOpening:0},
+    sales:[],
+    factoryPayments:[],
+    adjustments:[]
+  }
 });
 
 let state = defaultState();
@@ -205,7 +212,7 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:6,
+    version:8,
     settings:{
       ...d.settings,
       ...(s.settings||{}),
@@ -224,7 +231,14 @@ function normalizeState(s){
     planCompletions:Array.isArray(s.planCompletions)?s.planCompletions:[],
     budgets:Array.isArray(s.budgets)?s.budgets:[],
     goals:Array.isArray(s.goals)?s.goals.map(g=>({...g,targetDate:g.targetDate||''})):[],
-    scenarios:Array.isArray(s.scenarios)?s.scenarios.map(x=>({...x,scenario:{extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:3,...(x.scenario||{})}})):[]
+    scenarios:Array.isArray(s.scenarios)?s.scenarios.map(x=>({...x,scenario:{extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:3,...(x.scenario||{})}})):[],
+    workspace:s.workspace==='business'?'business':'personal',
+    business:{
+      settings:{...d.business.settings,...(s.business?.settings||{})},
+      sales:Array.isArray(s.business?.sales)?s.business.sales:[],
+      factoryPayments:Array.isArray(s.business?.factoryPayments)?s.business.factoryPayments:[],
+      adjustments:Array.isArray(s.business?.adjustments)?s.business.adjustments:[]
+    }
   };
 }
 
@@ -1351,12 +1365,69 @@ function updateNavGlider(){
   nav.style.setProperty('--nav-index',Number.isFinite(slot)?slot:0);
 }
 
+
+function currentWorkspace(){return state.workspace==='business'?'business':'personal'}
+function businessData(){
+  if(!state.business)state.business=defaultState().business;
+  return state.business;
+}
+function businessMetrics(){
+  const b=businessData();
+  let card=Number(b.settings.cardOpening)||0,cash=Number(b.settings.cashOpening)||0,debt=0,revenue=0,cost=0;
+  for(const x of b.sales){const sale=Number(x.amount)||0, factory=Number(x.factoryCost)||0;revenue+=sale;cost+=factory;debt+=factory;if(x.method==='cash')cash+=sale;else card+=sale}
+  for(const x of b.factoryPayments){const a=Number(x.amount)||0;card-=a;debt-=a}
+  for(const x of b.adjustments){const a=Number(x.amount)||0;if(x.account==='cash')cash+=a;else card+=a}
+  debt=Math.max(0,debt);
+  const total=card+cash,free=total-debt,available=Math.max(0,Math.min(card,debt)),shortage=Math.max(0,debt-Math.max(0,card));
+  return {card,cash,debt,total,free,available,shortage,revenue,cost,gross:revenue-cost};
+}
+function businessMoney(n,signed=false){return fmtMajor(Number(n)||0,signed)}
+function updateWorkspaceChrome(){
+  const business=currentWorkspace()==='business';
+  const labels=business?{overview:'Обзор',transactions:'Продажи',plan:'Завод',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'};
+  $$('.nav-item').forEach(b=>{const t=b.dataset.tab;const sm=b.querySelector('small');if(sm&&labels[t])sm.textContent=labels[t]});
+  const fab=$('#fab');if(fab)fab.setAttribute('aria-label',business?'Добавить продажу':'Добавить операцию');
+  const wb=$('#workspaceSwitch');if(wb){wb.querySelector('strong').textContent=business?'Бизнес':'Личное';wb.classList.toggle('business',business)}
+}
+async function switchWorkspace(next){
+  if(!['personal','business'].includes(next)||next===currentWorkspace())return;
+  closeSheet();rememberViewState();state.workspace=next;activeTab='overview';window.scrollTo(0,0);await persist();updateWorkspaceChrome();render({motion:'none'});animatePageChrome();requestAnimationFrame(()=>animateTabSwap(next==='business'?1:-1));
+}
+function openWorkspaceSheet(){
+  const cur=currentWorkspace();
+  openSheet(`<div class="sheet-head"><div><h3>Пространство</h3><p class="sheet-subtitle">Личные и бизнес-финансы хранятся отдельно.</p></div><button class="sheet-close">×</button></div><div class="workspace-list list-surface"><button data-workspace="personal" class="workspace-choice ${cur==='personal'?'selected':''}"><span class="workspace-symbol">⌂</span><span><strong>Личное</strong><small>Счета, операции, планы и бюджеты</small></span><b>${cur==='personal'?'✓':''}</b></button><button data-workspace="business" class="workspace-choice ${cur==='business'?'selected':''}"><span class="workspace-symbol">💼</span><span><strong>${esc(businessData().settings.name||'Бизнес')}</strong><small>Продажи, наличные и расчёты с заводом</small></span><b>${cur==='business'?'✓':''}</b></button></div>`);
+  $$('[data-workspace]', $('#sheet')).forEach(b=>b.onclick=()=>switchWorkspace(b.dataset.workspace));
+}
+function businessSaleRow(x){return `<button class="tx-item business-sale-row" data-business-sale="${x.id}"><div class="tx-icon">${x.method==='cash'?'💶':'💳'}</div><div class="tx-main"><strong>${esc(x.note||'Продажа')}</strong><small>${fmtDate(x.date)} · ${x.method==='cash'?'наличные':'карта'} · заводу ${businessMoney(x.factoryCost)}</small></div><div class="tx-amount positive">+${businessMoney(x.amount)}</div></button>`}
+function renderBusinessOverview(){
+  const m=businessMetrics(), b=businessData();
+  $('#main').innerHTML=`<section class="business-hero"><div class="business-kicker">${esc(b.settings.name||'Бизнес')} · свободные деньги</div><div class="business-free ${m.free<0?'negative':''}">${businessMoney(m.free)}</div><div class="business-balance-grid"><div><span>Карта</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные</span><strong>${businessMoney(m.cash)}</strong></div></div></section>
+  <section class="factory-status ${m.shortage>0?'warning':''}"><div class="section-head"><h2>Расчёт с заводом</h2><button data-business-pay>Оплатить</button></div><div class="factory-debt"><span>Нужно заплатить</span><strong>${businessMoney(m.debt)}</strong></div><div class="factory-status-grid"><div><span>Можно оплатить сейчас</span><b>${businessMoney(m.available)}</b></div><div><span>${m.shortage>0?'Не хватает на карте':'После оплаты на карте'}</span><b>${businessMoney(m.shortage>0?m.shortage:Math.max(0,m.card-m.debt))}</b></div></div>${m.shortage>0?`<p class="business-warning">Для полного расчёта с заводом на карте не хватает ${businessMoney(m.shortage)}.</p>`:''}</section>
+  <section class="section"><div class="section-head"><h2>Результат</h2></div><div class="business-metrics list-surface"><div><span>Выручка</span><strong>${businessMoney(m.revenue)}</strong></div><div><span>Закупочная стоимость</span><strong>${businessMoney(m.cost)}</strong></div><div><span>Валовая прибыль</span><strong>${businessMoney(m.gross)}</strong></div></div></section>
+  <section class="section"><div class="section-head"><h2>Последние продажи</h2><button data-business-all>Все</button></div>${b.sales.length?`<div class="tx-list list-surface">${[...b.sales].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0)).slice(0,5).map(businessSaleRow).join('')}</div>`:'<div class="empty-inline"><strong>Продаж пока нет</strong><span>Нажмите +, чтобы записать первую продажу.</span></div>'}</section>`;
+  $('[data-business-pay]')?.addEventListener('click',openFactoryPaymentSheet);$('[data-business-all]')?.addEventListener('click',()=>switchTab('transactions'));$$('[data-business-sale]').forEach(el=>el.onclick=()=>openBusinessSaleDetail(el.dataset.businessSale));
+}
+function renderBusinessSales(){const b=businessData();const sales=[...b.sales].sort((a,z)=>(z.date||'').localeCompare(a.date||'')||((z.createdAt||0)-(a.createdAt||0)));$('#main').innerHTML=`<section class="section first-section"><div class="section-head"><div><h2>Продажи</h2><p>${sales.length} записей</p></div><button class="primary-mini" data-new-sale>+ Продажа</button></div>${sales.length?`<div class="tx-list list-surface">${sales.map(businessSaleRow).join('')}</div>`:'<div class="empty-state"><strong>Здесь появятся продажи</strong><span>Для каждой продажи укажите сумму, способ оплаты и сколько нужно отдать заводу.</span></div>'}</section>`;$('[data-new-sale]')?.addEventListener('click',()=>openBusinessSaleSheet());$$('[data-business-sale]').forEach(el=>el.onclick=()=>openBusinessSaleDetail(el.dataset.businessSale))}
+function renderBusinessFactory(){const b=businessData(),m=businessMetrics();const payments=[...b.factoryPayments].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0));$('#main').innerHTML=`<section class="factory-status ${m.shortage>0?'warning':''} first-section"><div class="section-head"><h2>Завод</h2><button data-business-pay>Оплатить</button></div><div class="factory-debt"><span>Текущий долг</span><strong>${businessMoney(m.debt)}</strong></div><div class="factory-status-grid"><div><span>На карте</span><b>${businessMoney(m.card)}</b></div><div><span>Доступно для оплаты</span><b>${businessMoney(m.available)}</b></div></div>${m.shortage>0?`<p class="business-warning">Не хватает ${businessMoney(m.shortage)} на карте.</p>`:''}</section><section class="section"><div class="section-head"><h2>Оплаты заводу</h2></div>${payments.length?`<div class="settings-list list-surface">${payments.map(x=>`<button class="list-button" data-factory-payment="${x.id}"><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>${businessMoney(x.amount)}</strong><small>${fmtDate(x.date)}${x.note?' · '+esc(x.note):''}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`).join('')}</div>`:'<div class="empty-inline"><strong>Оплат ещё нет</strong><span>После перевода денег заводу запишите оплату здесь.</span></div>'}</section>`;$('[data-business-pay]')?.addEventListener('click',openFactoryPaymentSheet);$$('[data-factory-payment]').forEach(el=>el.onclick=()=>openFactoryPaymentDetail(el.dataset.factoryPayment))}
+function renderBusinessStats(){const m=businessMetrics(),b=businessData();const cardSales=b.sales.filter(x=>x.method!=='cash').reduce((s,x)=>s+Number(x.amount||0),0),cashSales=b.sales.filter(x=>x.method==='cash').reduce((s,x)=>s+Number(x.amount||0),0);$('#main').innerHTML=`<section class="section first-section"><div class="section-head"><h2>Статистика бизнеса</h2></div><div class="business-stat-hero"><span>Валовая прибыль</span><strong>${businessMoney(m.gross)}</strong><small>Выручка минус закупочная стоимость проданного товара</small></div></section><section class="section"><div class="business-metrics list-surface"><div><span>Продажи на карту</span><strong>${businessMoney(cardSales)}</strong></div><div><span>Продажи наличными</span><strong>${businessMoney(cashSales)}</strong></div><div><span>Всего выручка</span><strong>${businessMoney(m.revenue)}</strong></div><div><span>Закупочная стоимость</span><strong>${businessMoney(m.cost)}</strong></div><div><span>Текущий долг заводу</span><strong>${businessMoney(m.debt)}</strong></div></div></section>`}
+function renderBusinessMore(){const b=businessData(),m=businessMetrics();$('#main').innerHTML=`<section class="app-version-card"><div class="app-version-main"><div class="app-version-icon">${uiIcon('sparkles')}</div><div><small>Money App · Business</small><strong>V${APP_VERSION}</strong><span>Отдельное бизнес-пространство</span></div></div></section><section class="section first-section"><div class="section-head"><h2>Бизнес</h2></div><div class="settings-list list-surface"><button class="list-button" data-business-settings><span class="settings-icon">${uiIcon('wallet')}</span><div class="lb-main"><strong>Настройки бизнеса</strong><small>${esc(b.settings.name||'Бизнес')} · стартовые остатки</small></div><span class="arrow">${uiIcon('chevron')}</span></button><button class="list-button" data-business-adjust><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>Корректировка остатка</strong><small>Если фактическая карта или наличные отличаются</small></div><span class="arrow">${uiIcon('chevron')}</span></button></div></section><section class="section"><div class="business-metrics list-surface"><div><span>Карта</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные</span><strong>${businessMoney(m.cash)}</strong></div><div><span>Долг заводу</span><strong>${businessMoney(m.debt)}</strong></div></div></section><section class="section"><button class="secondary-btn" data-switch-personal>Перейти в личные финансы</button></section>`;$('[data-business-settings]')?.addEventListener('click',openBusinessSettings);$('[data-business-adjust]')?.addEventListener('click',openBusinessAdjustmentSheet);$('[data-switch-personal]')?.addEventListener('click',()=>switchWorkspace('personal'))}
+function renderBusiness(){if(activeTab==='overview')renderBusinessOverview();if(activeTab==='transactions')renderBusinessSales();if(activeTab==='plan')renderBusinessFactory();if(activeTab==='stats')renderBusinessStats();if(activeTab==='more')renderBusinessMore()}
+function openBusinessSaleSheet(existing=null){const x=existing||{};openSheet(`<div class="sheet-head"><div><h3>${existing?'Продажа':'Новая продажа'}</h3><p class="sheet-subtitle">Закупочную стоимость укажите вручную.</p></div><button class="sheet-close">×</button></div><form id="businessSaleForm"><div class="field"><label>Сумма продажи</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${x.amount??''}" placeholder="0,00"></div><div class="segmented business-method"><label><input type="radio" name="method" value="card" ${x.method!=='cash'?'checked':''}><span>Карта</span></label><label><input type="radio" name="method" value="cash" ${x.method==='cash'?'checked':''}><span>Наличные</span></label></div><div class="field"><label>Нужно отдать заводу</label><input name="factoryCost" type="number" inputmode="decimal" min="0" step="0.01" required value="${x.factoryCost??''}" placeholder="0,00"><small>Эта сумма сразу увеличит долг заводу.</small></div><div class="field"><label>Дата</label><input name="date" type="date" required value="${x.date||todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" value="${esc(x.note||'')}" placeholder="Товар или заказ"></div><div class="form-error hidden"></div><button class="primary-btn">${existing?'Сохранить':'Добавить продажу'}</button></form>`);$('#businessSaleForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),factoryCost=Number(f.get('factoryCost'));if(!(amount>0)||factoryCost<0){setFormError(e.currentTarget,'Проверьте суммы');return}const item={id:x.id||uid(),amount,factoryCost,method:f.get('method')==='cash'?'cash':'card',date:String(f.get('date')||todayISO()),note:String(f.get('note')||'').trim(),createdAt:x.createdAt||Date.now(),updatedAt:Date.now()};const b=businessData();if(existing)b.sales=b.sales.map(v=>v.id===x.id?item:v);else b.sales.push(item);await persist();closeSheet();render({motion:'refresh'});showToast(existing?'Продажа обновлена':'Продажа добавлена')}}
+function openBusinessSaleDetail(id){const x=businessData().sales.find(v=>v.id===id);if(!x)return;openSheet(`<div class="sheet-head"><h3>${esc(x.note||'Продажа')}</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Получено</span><strong>${businessMoney(x.amount)}</strong></div><div><span>Способ</span><strong>${x.method==='cash'?'Наличные':'Карта'}</strong></div><div><span>Заводу</span><strong>${businessMoney(x.factoryCost)}</strong></div><div><span>Дата</span><strong>${esc(fmtDate(x.date))}</strong></div></div><button class="secondary-btn" data-edit-business-sale>Изменить</button><button class="danger-btn" data-delete-business-sale>Удалить продажу</button>`);$('[data-edit-business-sale]')?.addEventListener('click',()=>openBusinessSaleSheet(x));$('[data-delete-business-sale]')?.addEventListener('click',async()=>{if(!confirm('Удалить продажу? Балансы и долг заводу будут пересчитаны.'))return;businessData().sales=businessData().sales.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Продажа удалена')})}
+function openFactoryPaymentSheet(){const m=businessMetrics();openSheet(`<div class="sheet-head"><div><h3>Оплата заводу</h3><p class="sheet-subtitle">Оплата всегда списывается с бизнес-карты.</p></div><button class="sheet-close">×</button></div><div class="business-payment-hint"><span>Долг ${businessMoney(m.debt)}</span><span>На карте ${businessMoney(m.card)}</span></div><form id="factoryPaymentForm"><div class="field"><label>Сумма</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" max="${Math.max(0,m.debt)}" required value="${m.available>0?m.available:''}" placeholder="0,00"></div><div class="field"><label>Дата</label><input name="date" type="date" required value="${todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" placeholder="Например: перевод за неделю"></div><div class="form-error hidden"></div><button class="primary-btn" ${m.debt<=0?'disabled':''}>Записать оплату</button></form>`);$('#factoryPaymentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),now=businessMetrics();if(!(amount>0)){setFormError(e.currentTarget,'Введите сумму');return}if(amount>now.debt+.001){setFormError(e.currentTarget,'Сумма больше текущего долга заводу');return}if(amount>now.card+.001){setFormError(e.currentTarget,'На бизнес-карте недостаточно денег');return}businessData().factoryPayments.push({id:uid(),amount,date:String(f.get('date')||todayISO()),note:String(f.get('note')||'').trim(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Оплата заводу записана')}}
+function openFactoryPaymentDetail(id){const x=businessData().factoryPayments.find(v=>v.id===id);if(!x)return;openSheet(`<div class="sheet-head"><h3>Оплата заводу</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Сумма</span><strong>${businessMoney(x.amount)}</strong></div><div><span>Дата</span><strong>${esc(fmtDate(x.date))}</strong></div>${x.note?`<div><span>Комментарий</span><strong>${esc(x.note)}</strong></div>`:''}</div><button class="danger-btn" data-delete-factory-payment>Удалить оплату</button>`);$('[data-delete-factory-payment]')?.addEventListener('click',async()=>{if(!confirm('Удалить эту оплату? Долг заводу будет восстановлен.'))return;businessData().factoryPayments=businessData().factoryPayments.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Оплата удалена')})}
+function openBusinessSettings(){const b=businessData();openSheet(`<div class="sheet-head"><h3>Настройки бизнеса</h3><button class="sheet-close">×</button></div><form id="businessSettingsForm"><div class="field"><label>Название</label><input name="name" maxlength="40" value="${esc(b.settings.name||'Бизнес')}"></div><div class="field"><label>Стартовый остаток карты</label><input name="cardOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cardOpening)||0}"><small>Остаток до первой записанной в приложении продажи.</small></div><div class="field"><label>Стартовые наличные</label><input name="cashOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cashOpening)||0}"></div><button class="primary-btn">Сохранить</button></form>`);$('#businessSettingsForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);b.settings.name=String(f.get('name')||'Бизнес').trim()||'Бизнес';b.settings.cardOpening=Number(f.get('cardOpening'))||0;b.settings.cashOpening=Number(f.get('cashOpening'))||0;await persist();closeSheet();updateWorkspaceChrome();render();showToast('Настройки сохранены')}}
+function openBusinessAdjustmentSheet(){openSheet(`<div class="sheet-head"><div><h3>Корректировка остатка</h3><p class="sheet-subtitle">Используйте только для сверки с фактическими деньгами.</p></div><button class="sheet-close">×</button></div><form id="businessAdjustmentForm"><div class="field"><label>Счёт</label><select name="account"><option value="card">Карта</option><option value="cash">Наличные</option></select></div><div class="field"><label>Изменение</label><input name="amount" type="number" inputmode="decimal" step="0.01" required placeholder="Например: -20 или 50"></div><div class="field"><label>Причина</label><input name="note" maxlength="80" required placeholder="Сверка остатка"></div><button class="primary-btn">Применить</button></form>`);$('#businessAdjustmentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount'));if(!amount)return;businessData().adjustments.push({id:uid(),account:f.get('account')==='cash'?'cash':'card',amount,note:String(f.get('note')||'').trim(),date:todayISO(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Остаток скорректирован')}}
+
 function render({motion='refresh',direction=0}={}){
   applyUISettings();
+  updateWorkspaceChrome();
   chartRegistry.clear();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
   updateNavGlider();
-  const title={overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'}[activeTab]; setPageTitle(title); if(motion!=='none')animatePageChrome();
+  const business=currentWorkspace()==='business';
+  const title=(business?{overview:'Обзор',transactions:'Продажи',plan:'Завод',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'})[activeTab]; setPageTitle(title); if(motion!=='none')animatePageChrome();
+  if(business){renderBusiness();requestAnimationFrame(()=>{enhanceRenderedUI();if(motion!=='none')animateMainSurface(motion,direction)});return}
   if(activeTab==='overview') renderOverview();
   if(activeTab==='transactions') renderTransactions();
   if(activeTab==='plan') renderPlan();
@@ -2025,7 +2096,7 @@ function renderMore(){
 
     <details class="tech-details section"><summary>Диагностика</summary><div class="diagnostics list-surface">
       <div><span>Версия приложения</span><strong>${APP_VERSION}</strong></div>
-      <div><span>Версия данных</span><strong>${state.version||6}</strong></div>
+      <div><span>Версия данных</span><strong>${state.version||8}</strong></div>
       <div><span>Операций</span><strong>${state.transactions.length}</strong></div>
       <div><span>Планов</span><strong>${state.plans.length}</strong></div>
       <div><span>Хранение</span><strong>IndexedDB · локально</strong></div>
@@ -2642,6 +2713,7 @@ document.addEventListener('contextmenu',e=>{if(!isEditableTarget(e.target))e.pre
 document.addEventListener('selectstart',e=>{if(!isEditableTarget(e.target))e.preventDefault()});
 
 function bindShell(){
+  $('#workspaceSwitch')?.addEventListener('click',openWorkspaceSheet);
   $$('.nav-item').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
   const fab=$('#fab');
   if(fab){
@@ -2654,7 +2726,7 @@ function bindShell(){
       holdTimer=setTimeout(()=>{held=true;holdTimer=null;pulseElement(fab);openQuickAddMenu()},430);
     },{passive:false});
     fab.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;if(Math.hypot(e.clientX-startX,e.clientY-startY)>10)cancelHold()},{passive:true});
-    fab.addEventListener('pointerup',e=>{if(pointerId!==e.pointerId)return;pointerId=null;cancelHold();if(held)return;if(activeTab==='plan')openPlanSheet();else if(activeTab==='more')openQuickAddMenu();else openTransactionSheet(null,'expense')});
+    fab.addEventListener('pointerup',e=>{if(pointerId!==e.pointerId)return;pointerId=null;cancelHold();if(held)return;if(currentWorkspace()==='business')openBusinessSaleSheet();else if(activeTab==='plan')openPlanSheet();else if(activeTab==='more')openQuickAddMenu();else openTransactionSheet(null,'expense')});
     fab.addEventListener('pointercancel',()=>{pointerId=null;cancelHold()});
   }
   $('#sheetBackdrop').onclick=closeSheet;

@@ -10,16 +10,13 @@
   <link rel="manifest" href="./manifest.json" />
   <link rel="apple-touch-icon" href="./icons/icon-180.png" />
   <link rel="icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./style.css?v=7.1.1" />
+  <link rel="stylesheet" href="./style.css?v=8.0.0" />
   <title>Мои финансы</title>
 </head>
 <body>
   <div id="app">
     <header class="topbar">
-      <div>
-        <div class="eyebrow" id="todayLabel"></div>
-        <h1 id="pageTitle">Обзор</h1>
-      </div>
+      <div class="topbar-title"><button id="workspaceSwitch" class="workspace-switch" type="button" aria-label="Переключить пространство"><span class="workspace-dot"></span><strong>Личное</strong><span class="workspace-chevron">⌄</span></button><div class="eyebrow" id="todayLabel"></div><h1 id="pageTitle">Обзор</h1></div>
       <button class="icon-btn" id="privacyToggle" aria-label="Скрыть суммы" title="Скрыть суммы">
         <span id="privacyIcon">◉</span>
       </button>
@@ -44,6 +41,6 @@
   <input id="importInput" type="file" accept="application/json,.json" hidden />
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=7.1.1" defer></script>
+  <script src="./app.js?v=8.0.0" defer></script>
 </body>
 </html>

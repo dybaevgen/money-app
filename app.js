@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '8.2.0';
+const APP_VERSION = '8.3.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -2945,7 +2945,29 @@ function bindShell(){
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')rememberViewState()},{passive:true});
 }
 
+function syncViewportGeometry(){
+  const vv=window.visualViewport;
+  const width=Math.max(1,Math.round(vv?.width||window.innerWidth||document.documentElement.clientWidth||0));
+  const height=Math.max(1,Math.round(vv?.height||window.innerHeight||document.documentElement.clientHeight||0));
+  document.documentElement.style.setProperty('--viewport-width',`${width}px`);
+  document.documentElement.style.setProperty('--viewport-height',`${height}px`);
+  document.documentElement.dataset.viewport=width>=1024?'wide':width>=600?'tablet':'phone';
+}
+function bindViewportGeometry(){
+  syncViewportGeometry();
+  let frame=0;
+  const schedule=()=>{
+    if(frame)cancelAnimationFrame(frame);
+    frame=requestAnimationFrame(()=>{frame=0;syncViewportGeometry()});
+  };
+  window.addEventListener('resize',schedule,{passive:true});
+  window.addEventListener('orientationchange',schedule,{passive:true});
+  window.visualViewport?.addEventListener('resize',schedule,{passive:true});
+  window.visualViewport?.addEventListener('scroll',schedule,{passive:true});
+}
+
 async function init(){
+  bindViewportGeometry();
   loadUIState();
   const saved=await dbGet().catch(()=>null); state=normalizeState(saved||defaultState()); if(!saved)await persist();
   txFilter=uiMemory.txFilter||'all';statsRange=Number(uiMemory.statsRange)||6;planForecastRange=Number(uiMemory.planForecastRange)||12;

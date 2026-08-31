@@ -4073,3 +4073,298 @@ button:not(.is-pressed),
 .budget-suggestion-row{min-height:58px;padding:10px 11px;border:1px solid var(--line-soft);border-radius:16px;background:rgba(255,255,255,.025);display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center}
 .budget-suggestion-row>span{width:32px;height:32px;border-radius:10px;background:rgba(var(--accent-rgb),.075);display:grid;place-items:center;font-size:15px}
 .budget-suggestion-row strong{display:block;font-size:11px}.budget-suggestion-row small{display:block;margin-top:3px;color:var(--muted);font-size:8.5px}.budget-suggestion-row>b{font-size:11px;font-variant-numeric:tabular-nums}
+
+
+/* =========================================================
+   V8.3 — Adaptive Geometry
+   Cross-device layout for compact Android phones, iPhone,
+   iPad/tablets, landscape, and larger browser/PWA windows.
+   This final layer intentionally overrides old device-specific
+   geometry while preserving the existing visual language/motion.
+   ========================================================= */
+
+:root{
+  --safe-top:env(safe-area-inset-top,0px);
+  --safe-right:env(safe-area-inset-right,0px);
+  --safe-bottom-raw:env(safe-area-inset-bottom,0px);
+  --safe-left:env(safe-area-inset-left,0px);
+  --page-max:1040px;
+  --page-gutter:clamp(14px,3.25vw,36px);
+  --dock-max:720px;
+  --sheet-max:760px;
+  --dock-h:76px;
+}
+
+html,
+body{
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  overflow-x:clip!important;
+}
+body{
+  min-height:100dvh;
+}
+@supports not (height:100dvh){
+  body{min-height:100vh}
+}
+
+/* Main canvas: fluid on phones, comfortably wider on tablets, but never
+   stretched into an unreadable desktop-width column. */
+#app{
+  width:100%!important;
+  max-width:var(--page-max)!important;
+  min-width:0!important;
+  min-height:100dvh!important;
+  margin-inline:auto!important;
+  padding-bottom:calc(var(--dock-h) + max(18px,var(--safe-bottom-raw)) + 24px)!important;
+}
+.topbar,
+.main{
+  width:100%!important;
+  min-width:0!important;
+}
+.topbar{
+  padding-left:max(var(--page-gutter),calc(var(--safe-left) + 12px))!important;
+  padding-right:max(var(--page-gutter),calc(var(--safe-right) + 12px))!important;
+}
+.main{
+  padding-left:max(var(--page-gutter),calc(var(--safe-left) + 12px))!important;
+  padding-right:max(var(--page-gutter),calc(var(--safe-right) + 12px))!important;
+  padding-bottom:36px!important;
+}
+
+/* Fluid type only where size materially affects geometry. */
+.topbar h1{font-size:clamp(31px,4.4vw,42px)!important}
+.capital-value{font-size:clamp(44px,7.2vw,64px)!important}
+.business-free{font-size:clamp(36px,5.6vw,50px)!important}
+
+/* Any flexible row/grid child must be allowed to shrink. This prevents a
+   long account/category/title from widening the entire viewport on Android. */
+.main *,
+.sheet *{min-inline-size:0}
+img,svg,canvas{max-width:100%}
+.item-title,
+.item-sub,
+.business-metrics span,
+.business-detail span{
+  overflow-wrap:anywhere;
+}
+
+/* Bottom dock: one geometry for all phones. Old exact-iPhone widths are
+   deliberately neutralized so 360/384/412/430/480 px Android widths fit too. */
+body > .bottom-nav{
+  --dock-side:10px;
+  left:50%!important;
+  right:auto!important;
+  width:min(calc(100vw - (var(--dock-side) * 2)),var(--dock-max))!important;
+  max-width:min(calc(100vw - (var(--dock-side) * 2)),var(--dock-max))!important;
+  min-width:0!important;
+  height:var(--dock-h)!important;
+  min-height:var(--dock-h)!important;
+  bottom:max(4px,var(--safe-bottom-raw))!important;
+  transform:translateX(-50%)!important;
+  padding:6px 8px!important;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) clamp(62px,9vw,72px) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)!important;
+}
+body > .bottom-nav .nav-item{
+  min-width:0!important;
+  width:auto!important;
+  padding-inline:1px!important;
+}
+body > .bottom-nav .nav-item small{
+  display:block!important;
+  max-width:100%!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+  font-size:clamp(8px,2.2vw,10px)!important;
+}
+body > .bottom-nav #fab,
+body > .bottom-nav .nav-add{
+  width:clamp(56px,8vw,62px)!important;
+  min-width:clamp(56px,8vw,62px)!important;
+  max-width:clamp(56px,8vw,62px)!important;
+  height:clamp(56px,8vw,62px)!important;
+  min-height:clamp(56px,8vw,62px)!important;
+  max-height:clamp(56px,8vw,62px)!important;
+}
+
+/* Sheets: edge-to-edge on phones, floating card on tablets. dvh keeps forms
+   usable with browser chrome and Samsung/iPad software keyboards. */
+#sheet.sheet{
+  width:min(100vw,var(--sheet-max))!important;
+  max-width:min(100vw,var(--sheet-max))!important;
+  max-height:calc(100dvh - max(8px,var(--safe-top)))!important;
+  padding-left:max(16px,var(--safe-left))!important;
+  padding-right:max(16px,var(--safe-right))!important;
+}
+#sheet .sheet-content{
+  max-height:calc(100dvh - max(8px,var(--safe-top)) - 31px)!important;
+  padding-bottom:calc(20px + var(--safe-bottom-raw))!important;
+}
+.field input,
+.field select,
+.field textarea{
+  max-width:100%!important;
+}
+
+/* Data visualizations scale with available width instead of assuming a phone. */
+.chart{height:clamp(210px,34vw,320px)!important}
+.plan-chart{height:clamp(245px,40vw,370px)!important}
+.finance-calendar{width:100%!important}
+.cal-day{height:clamp(48px,7vw,64px)!important}
+
+/* ---------------- Compact phones / foldable outer screens ---------------- */
+@media (max-width:359px){
+  :root{--page-gutter:12px;--dock-h:70px}
+  .topbar h1{font-size:29px!important}
+  .capital-value{font-size:40px!important}
+  .section-head h2{font-size:19px!important}
+  body > .bottom-nav{--dock-side:5px;padding-inline:5px!important;border-radius:24px!important}
+  body > .bottom-nav{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 58px minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)!important}
+  body > .bottom-nav #fab,
+  body > .bottom-nav .nav-add{width:54px!important;min-width:54px!important;max-width:54px!important;height:54px!important;min-height:54px!important;max-height:54px!important}
+  body > .bottom-nav .nav-item small{font-size:7.5px!important}
+  .compact-actions{gap:5px!important}
+  .compact-actions button{padding-inline:5px!important}
+  .compact-actions span{font-size:9.5px!important}
+  .grid-3,
+  .stats-kpi-grid,
+  .hero-row-3,
+  .plan-kpis{grid-template-columns:1fr 1fr!important}
+  .grid-3>*:last-child:nth-child(odd),
+  .hero-row-3>*:last-child:nth-child(odd),
+  .plan-kpis>*:last-child:nth-child(odd){grid-column:1/-1!important}
+  .form-grid{grid-template-columns:1fr!important}
+  .field.full{grid-column:auto!important}
+  .detail-actions.three{grid-template-columns:1fr!important}
+  .calendar-weekdays,.calendar-grid{gap:2px!important}
+  .cal-day small{font-size:6px!important}
+}
+
+/* ---------------- Normal phones, including Samsung Galaxy S/A ranges ----- */
+@media (min-width:360px) and (max-width:599px){
+  #app{max-width:599px!important}
+  .main{padding-bottom:34px!important}
+  .form-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .field.full{grid-column:1/-1!important}
+}
+
+@media (max-width:430px){
+  .form-grid{grid-template-columns:1fr!important}
+  .field.full{grid-column:auto!important}
+  .detail-actions.three{grid-template-columns:1fr!important}
+  .detail-actions.three .secondary-btn,
+  .detail-actions.three .primary-btn{font-size:11px!important}
+  .business-balance-grid,
+  .factory-status-grid{grid-template-columns:1fr 1fr!important}
+}
+
+/* ---------------- Tablets: iPad, Galaxy Tab, Android large screens -------- */
+@media (min-width:600px){
+  :root{--page-gutter:clamp(28px,4.2vw,46px);--dock-h:78px}
+  #app{max-width:1040px!important}
+  .topbar{padding-top:calc(14px + var(--safe-top))!important}
+  .main{padding-top:6px!important;padding-bottom:48px!important}
+  .section{margin-top:34px!important}
+  .section-head h2{font-size:23px!important}
+
+  .grid-3,
+  .stats-kpi-grid,
+  .hero-row-3,
+  .plan-kpis{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+  .grid-2{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .business-balance-grid,
+  .factory-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .form-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .field.full{grid-column:1/-1!important}
+
+  body > .bottom-nav{
+    --dock-side:18px;
+    width:min(calc(100vw - 36px),720px)!important;
+    max-width:min(calc(100vw - 36px),720px)!important;
+    padding-inline:10px!important;
+    border-radius:29px!important;
+  }
+  body > .bottom-nav .nav-item small{font-size:10px!important}
+
+  #sheet.sheet{
+    width:min(calc(100vw - 40px),var(--sheet-max))!important;
+    max-width:min(calc(100vw - 40px),var(--sheet-max))!important;
+    bottom:max(16px,var(--safe-bottom-raw))!important;
+    max-height:min(88dvh,860px)!important;
+    border-radius:30px!important;
+    border-bottom:1px solid rgba(255,255,255,.12)!important;
+    padding-left:clamp(20px,3vw,28px)!important;
+    padding-right:clamp(20px,3vw,28px)!important;
+  }
+  #sheet .sheet-content{
+    max-height:min(calc(88dvh - 31px),829px)!important;
+    padding-bottom:24px!important;
+  }
+  .sheet-head h3{font-size:22px!important}
+  .cal-day>span{font-size:12px!important}
+  .cal-day small{font-size:7.5px!important}
+}
+
+/* iPad portrait and similar: use most of the screen without making cards
+   edge-to-edge. */
+@media (min-width:700px) and (max-width:1023px) and (orientation:portrait){
+  :root{--page-max:920px}
+  .main,.topbar{padding-left:max(clamp(30px,5vw,48px),calc(var(--safe-left) + 16px))!important;padding-right:max(clamp(30px,5vw,48px),calc(var(--safe-right) + 16px))!important}
+  .chart{height:clamp(250px,38vw,340px)!important}
+  .plan-chart{height:clamp(300px,43vw,390px)!important}
+}
+
+/* Wider tablets / desktop PWA: keep a composed app canvas rather than
+   stretching to the edges of a 12–14 inch screen. */
+@media (min-width:1024px){
+  :root{--page-max:1100px;--page-gutter:42px}
+  #app{max-width:1100px!important}
+  .main,.topbar{padding-left:max(42px,calc(var(--safe-left) + 18px))!important;padding-right:max(42px,calc(var(--safe-right) + 18px))!important}
+  .topbar h1{font-size:42px!important}
+  .capital-value{font-size:64px!important}
+  .chart{height:320px!important}
+  .plan-chart{height:380px!important}
+  .cal-day{height:64px!important}
+}
+
+/* Short landscape phones: preserve vertical usable space. */
+@media (orientation:landscape) and (max-height:520px){
+  :root{--dock-h:64px;--page-gutter:clamp(18px,4vw,34px)}
+  #app{padding-bottom:calc(64px + max(8px,var(--safe-bottom-raw)) + 16px)!important}
+  .topbar{padding-top:calc(7px + var(--safe-top))!important;padding-bottom:6px!important}
+  .topbar h1{font-size:28px!important;margin-top:2px!important}
+  .workspace-switch{min-height:20px!important}
+  .main{padding-top:0!important}
+  .section{margin-top:22px!important}
+  body > .bottom-nav{
+    width:min(calc(100vw - 2 * max(12px,var(--safe-left))),720px)!important;
+    height:64px!important;min-height:64px!important;
+    bottom:max(2px,var(--safe-bottom-raw))!important;
+    padding-block:4px!important;
+  }
+  body > .bottom-nav .nav-item{height:52px!important}
+  body > .bottom-nav #fab,
+  body > .bottom-nav .nav-add{width:52px!important;min-width:52px!important;max-width:52px!important;height:52px!important;min-height:52px!important;max-height:52px!important;border-radius:18px!important}
+  #sheet.sheet{max-height:calc(100dvh - max(4px,var(--safe-top)))!important}
+  #sheet .sheet-content{max-height:calc(100dvh - max(4px,var(--safe-top)) - 28px)!important}
+}
+
+/* Pointer devices get stable hover without affecting touch geometry. */
+@media (hover:hover) and (pointer:fine){
+  body > .bottom-nav .nav-item{cursor:pointer}
+}
+
+/* V8.3 landscape-safe sheet correction: a floating tablet sheet must never
+   extend above a short landscape viewport once bottom/safe-area insets apply. */
+@media (orientation:landscape) and (max-height:520px){
+  #sheet.sheet{
+    bottom:max(0px,var(--safe-bottom-raw))!important;
+    max-height:calc(100dvh - max(4px,var(--safe-top)) - max(0px,var(--safe-bottom-raw)))!important;
+  }
+  #sheet .sheet-content{
+    max-height:calc(100dvh - max(4px,var(--safe-top)) - max(0px,var(--safe-bottom-raw)) - 28px)!important;
+  }
+}

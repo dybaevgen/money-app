@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '8.4.0';
+const APP_VERSION = '8.4.1';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -2459,7 +2459,7 @@ function installSheetPhysics(sheet,backdrop){
   const app=$('#app');
   if(!scroller)return;
 
-  let startY=0,lastY=0,lastT=0,lastVelocity=0;
+  let startX=0,startY=0,lastY=0,lastT=0,lastVelocity=0;
   let mode='';
   let modeStartY=0;
   let offset=0;
@@ -2469,7 +2469,7 @@ function installSheetPhysics(sheet,backdrop){
   let settleTimer=null;
 
   const ignoreTarget=target=>target instanceof Element && Boolean(target.closest(
-    'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell'
+    'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell,[data-horizontal-scroller],.filter-row,.forecast-range-tabs,.pill-tabs,.saved-scenarios'
   ));
 
   const maxScroll=()=>Math.max(0,scroller.scrollHeight-scroller.clientHeight);
@@ -2552,6 +2552,7 @@ function installSheetPhysics(sheet,backdrop){
     if(e.touches.length!==1)return;
     stopSettle();
     const touch=e.touches[0];
+    startX=touch.clientX;
     startY=lastY=touch.clientY;
     lastT=performance.now();
     lastVelocity=0;offset=0;mode='';tracking=true;
@@ -2563,6 +2564,7 @@ function installSheetPhysics(sheet,backdrop){
     const touch=e.touches[0];
     const y=touch.clientY;
     const now=performance.now();
+    const totalDx=touch.clientX-startX;
     const totalDy=y-startY;
     const frameDy=y-lastY;
     const frameDt=Math.max(1,now-lastT);
@@ -2572,7 +2574,10 @@ function installSheetPhysics(sheet,backdrop){
     lastY=y;lastT=now;
 
     if(!mode){
-      if(Math.abs(totalDy)<5)return;
+      if(Math.hypot(totalDx,totalDy)<5)return;
+      // Do not let a mostly-horizontal gesture become a vertical sheet drag.
+      // This is essential for category/account rails on iOS and Android.
+      if(Math.abs(totalDx)>Math.abs(totalDy)*1.12)return;
 
       if(atTop() && totalDy>0){
         activate('sheet-down',y,startY);
@@ -2791,8 +2796,8 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
     const defaultCategory=categoryCandidates.find(id=>id&&category(id)?.type===type)||cats[0]?.id||'';
     const toCandidates=[t.toAccountId,recent?.toAccountId,state.accounts.find(a=>a.id!==defaultAccount)?.id];
     const defaultTo=toCandidates.find(id=>id&&id!==defaultAccount&&account(id))||'';
-    const quickCats=[category(defaultCategory),...cats.filter(c=>c.id!==defaultCategory)].filter(Boolean).slice(0,6);
-    const quickAccounts=[account(defaultAccount),...state.accounts.filter(a=>a.id!==defaultAccount)].filter(Boolean).slice(0,4);
+    const quickCats=cats;
+    const quickAccounts=state.accounts;
     openSheet(`<div class="sheet-head quick-sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':type==='expense'?'Новый расход':type==='income'?'Новый доход':'Перевод'}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
       <div class="segmented tx-segmented"><button data-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-type="income" class="${type==='income'?'active':''}">Доход</button><button data-type="transfer" class="${type==='transfer'?'active':''}">Перевод</button></div>
       <form id="txForm" class="quick-tx-form">
@@ -2800,8 +2805,12 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
         ${!isTransfer?`
           <input type="hidden" name="categoryId" id="categoryHidden" value="${esc(defaultCategory||'')}">
           <input type="hidden" name="accountId" id="accountHidden" value="${esc(defaultAccount||'')}">
-          <div class="quick-picker"><label>Категория</label><div class="choice-scroller">${quickCats.map(c=>`<button type="button" class="choice-chip ${c.id===defaultCategory?'active':''}" data-quick-category="${c.id}"><span>${esc(c.icon)}</span>${esc(c.name)}</button>`).join('')}</div></div>
-          <div class="quick-picker"><label>Оплата</label><div class="choice-scroller">${quickAccounts.map(a=>`<button type="button" class="choice-chip account-choice ${a.id===defaultAccount?'active':''}" data-quick-account="${a.id}">${accountGlyph(a.type)}<span>${esc(a.name)}</span></button>`).join('')}</div></div>
+          <div class="quick-picker quick-category-picker">
+            <div class="quick-picker-title"><label>Категория</label><button type="button" class="quick-picker-more" id="toggleAllCategories" aria-expanded="false">Все</button></div>
+            <div class="choice-scroller choice-scroller-categories" data-horizontal-scroller>${quickCats.map(c=>`<button type="button" class="choice-chip ${c.id===defaultCategory?'active':''}" data-quick-category="${c.id}"><span>${esc(c.icon)}</span>${esc(c.name)}</button>`).join('')}</div>
+            <div class="quick-choice-grid hidden" id="allCategoriesGrid" aria-hidden="true">${quickCats.map(c=>`<button type="button" class="choice-chip ${c.id===defaultCategory?'active':''}" data-quick-category="${c.id}"><span>${esc(c.icon)}</span>${esc(c.name)}</button>`).join('')}</div>
+          </div>
+          <div class="quick-picker"><label>Оплата</label><div class="choice-scroller choice-scroller-accounts" data-horizontal-scroller>${quickAccounts.map(a=>`<button type="button" class="choice-chip account-choice ${a.id===defaultAccount?'active':''}" data-quick-account="${a.id}">${accountGlyph(a.type)}<span>${esc(a.name)}</span></button>`).join('')}</div></div>
           <details class="advanced-details" ${existing?'open':''}><summary>Дата, комментарий и другие варианты</summary><div class="advanced-body">
             <div class="field"><label>Все категории</label><select id="categorySelectFull">${categoryOptions(type,defaultCategory)}</select></div>
             <div class="field"><label>Все счета</label><select id="accountSelectFull">${accountOptions(defaultAccount)}</select></div>
@@ -2815,10 +2824,23 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
         ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить</button><button class="danger-btn" type="button" id="deleteTx">Удалить</button>':''}
       </form>`);
     $$('[data-type]').forEach(b=>b.onclick=()=>{const nextType=b.dataset.type;if(nextType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');return}type=nextType;build()});
-    $$('[data-quick-category]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickCategory;$('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#categorySelectFull');if(sel)sel.value=id});
+    $$('[data-quick-category]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickCategory;$('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===id));const sel=$('#categorySelectFull');if(sel)sel.value=id});
+    const toggleAllCategories=$('#toggleAllCategories');
+    if(toggleAllCategories)toggleAllCategories.onclick=()=>{
+      const grid=$('#allCategoriesGrid');if(!grid)return;
+      const opening=grid.classList.contains('hidden');
+      grid.classList.toggle('hidden',!opening);grid.setAttribute('aria-hidden',String(!opening));
+      toggleAllCategories.setAttribute('aria-expanded',String(opening));
+      toggleAllCategories.textContent=opening?'Свернуть':'Все';
+    };
     $$('[data-quick-account]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickAccount;$('#accountHidden').value=id;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#accountSelectFull');if(sel)sel.value=id});
     const catSel=$('#categorySelectFull');if(catSel)catSel.onchange=e=>{$('#categoryHidden').value=e.target.value;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===e.target.value))};
     const accSel=$('#accountSelectFull');if(accSel)accSel.onchange=e=>{$('#accountHidden').value=e.target.value;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x.dataset.quickAccount===e.target.value))};
+    // Keep the current choice in view, while preserving a stable category order.
+    requestAnimationFrame(()=>{
+      $('[data-quick-category].active')?.scrollIntoView({block:'nearest',inline:'center'});
+      $('[data-quick-account].active')?.scrollIntoView({block:'nearest',inline:'center'});
+    });
     $('#txForm').onsubmit=e=>{
       e.preventDefault(); const form=e.currentTarget; const fd=new FormData(form); const amount=Number(fd.get('amount'));
       setFormError(form,'');

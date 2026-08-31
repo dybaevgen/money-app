@@ -4368,3 +4368,112 @@ body > .bottom-nav .nav-add{
     max-height:calc(100dvh - max(4px,var(--safe-top)) - max(0px,var(--safe-bottom-raw)) - 28px)!important;
   }
 }
+
+/* Money App V8.4.1 — transaction sheet horizontal rails ------------------
+   The sheet must allow native horizontal panning in nested category/account
+   rails. V8.4.0 restricted the whole sheet to pan-y, which could make those
+   rails feel locked on iOS/Android. */
+#sheet.sheet{
+  touch-action:pan-x pan-y!important;
+}
+
+.quick-picker{
+  min-width:0;
+  overflow:visible;
+}
+.choice-scroller[data-horizontal-scroller]{
+  width:100%;
+  max-width:100%;
+  display:flex;
+  gap:8px;
+  overflow-x:auto!important;
+  overflow-y:hidden!important;
+  overscroll-behavior-x:contain;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-x!important;
+  scroll-snap-type:x proximity;
+  scroll-padding-inline:2px;
+  padding:1px 2px 5px;
+  scrollbar-width:none;
+}
+.choice-scroller[data-horizontal-scroller]::-webkit-scrollbar{display:none}
+.choice-scroller[data-horizontal-scroller] .choice-chip{
+  flex:0 0 auto!important;
+  max-width:min(72vw,250px);
+  scroll-snap-align:start;
+  -webkit-user-select:none;
+  user-select:none;
+}
+.choice-scroller-categories .choice-chip{
+  min-height:44px;
+}
+.choice-scroller-accounts .choice-chip{
+  min-height:44px;
+}
+
+/* On compact phones the next chip remains slightly visible; that acts as a
+   discoverable cue that the rail continues without adding visual clutter. */
+@media (max-width:430px){
+  .choice-scroller[data-horizontal-scroller]{
+    margin-right:-16px;
+    width:calc(100% + 16px);
+    padding-right:18px;
+  }
+  .choice-scroller[data-horizontal-scroller] .choice-chip{
+    max-width:76vw;
+  }
+}
+
+/* Tablet/desktop pointer input: native horizontal wheel/trackpad works and
+   focus outlines are not clipped by the rail. */
+@media (min-width:600px){
+  .choice-scroller[data-horizontal-scroller]{padding-bottom:7px}
+  .choice-scroller[data-horizontal-scroller] .choice-chip{max-width:300px}
+}
+
+/* Discoverable fallback: the rail is swipable, while “Все” expands a full
+   category grid so no category is ever inaccessible. */
+.quick-picker-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:0 2px 7px;
+}
+.quick-picker-title>label{
+  font-size:10px;
+  color:var(--muted);
+}
+.quick-picker-more{
+  border:0;
+  background:transparent;
+  color:#93acf0;
+  min-height:28px;
+  padding:3px 2px 3px 10px;
+  font-size:10px;
+  font-weight:700;
+}
+.quick-category-picker>label{display:none}
+.quick-choice-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+  margin-top:9px;
+  padding:10px;
+  border:1px solid var(--line-soft);
+  border-radius:16px;
+  background:rgba(255,255,255,.025);
+}
+.quick-choice-grid.hidden{display:none!important}
+.quick-choice-grid .choice-chip{
+  width:100%;
+  min-width:0!important;
+  max-width:100%!important;
+  justify-content:flex-start;
+  text-align:left;
+  white-space:normal;
+  line-height:1.25;
+}
+@media (min-width:600px){
+  .quick-choice-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}

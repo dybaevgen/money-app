@@ -942,6 +942,7 @@ html[data-density="compact"] .capital-value{font-size:47px}
 .daily-guide>span .ui-icon{width:16px;height:16px}
 .daily-guide small{display:block;font-size:8px;color:var(--subtle)}
 .daily-guide strong{display:block;margin-top:3px;font-size:11px;color:#ccd3de;font-weight:620}
+.daily-guide em{display:block;margin-top:3px;font-size:8px;line-height:1.35;color:var(--subtle);font-style:normal}.daily-guide.warning>span{background:rgba(255,176,74,.10);color:#f2b55f}.daily-guide em.negative{color:#ef7b8f}
 .daily-guide>button{border:0;background:transparent;color:var(--subtle);padding:5px}.daily-guide>button .ui-icon{width:14px;height:14px}
 .inbox-list{display:flex;flex-direction:column;gap:8px}
 .inbox-item{width:100%;min-height:70px;padding:11px 12px;border:1px solid var(--line);border-radius:17px;background:rgba(255,255,255,.025);color:inherit;display:grid;grid-template-columns:34px 1fr 16px;gap:10px;align-items:center;text-align:left}
@@ -4053,3 +4054,22 @@ button:not(.is-pressed),
 .business-hero{margin:8px 0 18px;padding:22px 20px;border-radius:24px;background:linear-gradient(145deg,rgba(93,215,169,.14),rgba(124,156,255,.08));border:1px solid rgba(93,215,169,.16)}.business-kicker{font-size:12px;color:var(--muted,#8992a5);margin-bottom:7px}.business-free{font-size:38px;font-weight:760;letter-spacing:-.04em;line-height:1.1}.business-free.negative{color:#ff7b8a}.business-balance-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}.business-balance-grid div,.factory-status-grid div{display:flex;flex-direction:column;gap:5px;padding:12px;border-radius:15px;background:rgba(255,255,255,.045)}.business-balance-grid span,.factory-status-grid span,.factory-debt span,.business-metrics span,.business-detail span{font-size:12px;color:var(--muted,#8992a5)}
 .factory-status{margin:0 0 18px;padding:18px;border-radius:22px;background:rgba(255,255,255,.035);border:1px solid var(--line,rgba(255,255,255,.07))}.factory-status.first-section{margin-top:8px}.factory-status.warning{border-color:rgba(255,123,138,.24);background:rgba(255,123,138,.055)}.factory-status .section-head{margin-bottom:14px}.factory-status .section-head button,.section-head [data-business-all]{border:0;background:rgba(124,156,255,.12);color:#9fb4ff;border-radius:10px;padding:7px 10px;font-weight:650}.factory-debt{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:13px}.factory-debt strong{font-size:25px}.factory-status-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.business-warning{margin:12px 2px 0;color:#ff9aa5;font-size:12px;line-height:1.45}
 .business-metrics{overflow:hidden}.business-metrics>div,.business-detail>div{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:14px 15px}.business-metrics>div+div,.business-detail>div+div{border-top:1px solid var(--line,rgba(255,255,255,.07))}.business-metrics strong,.business-detail strong{text-align:right}.business-stat-hero{padding:20px;border-radius:20px;background:rgba(93,215,169,.08);display:flex;flex-direction:column;gap:7px}.business-stat-hero span,.business-stat-hero small{color:var(--muted,#8992a5)}.business-stat-hero strong{font-size:32px;letter-spacing:-.03em}.business-sale-row{width:100%;border:0;color:inherit}.business-payment-hint{display:flex;justify-content:space-between;gap:10px;padding:12px 14px;margin-bottom:14px;border-radius:14px;background:rgba(255,255,255,.04);color:var(--muted,#8992a5);font-size:12px}.primary-mini{border:0;border-radius:11px;padding:8px 11px;background:rgba(93,215,169,.13);color:#79e6bd;font-weight:700}
+
+/* V8.2 — personal budget pacing and assisted budgeting. */
+.budget-pace-card{
+  width:100%;margin:8px 0 2px;padding:11px 12px;border:1px solid var(--line-soft);border-radius:18px;
+  background:rgba(var(--accent-rgb),.045);display:grid;grid-template-columns:34px minmax(0,1fr) 16px;gap:10px;align-items:center;text-align:left;color:inherit;
+}
+.budget-pace-card.warning{border-color:rgba(247,199,104,.16);background:rgba(247,199,104,.045)}
+.budget-pace-card.over{border-color:rgba(255,126,141,.17);background:rgba(255,126,141,.05)}
+.budget-pace-icon{width:34px;height:34px;border-radius:11px;background:rgba(var(--accent-rgb),.08);display:grid;place-items:center;color:var(--accent)}
+.budget-pace-card.warning .budget-pace-icon{color:var(--warn);background:rgba(247,199,104,.08)}
+.budget-pace-card.over .budget-pace-icon{color:var(--expense);background:rgba(255,126,141,.08)}
+.budget-pace-icon .ui-icon{width:17px;height:17px}
+.budget-pace-card>div{min-width:0}.budget-pace-card small{display:block;color:var(--muted);font-size:8.5px}.budget-pace-card strong{display:block;margin-top:3px;font-size:11px}.budget-pace-card em{display:block;margin-top:3px;color:var(--subtle);font-size:8px;line-height:1.35;font-style:normal}.budget-pace-card>.ui-icon{width:14px;height:14px;color:var(--subtle)}
+.detail-actions.three{grid-template-columns:repeat(3,1fr)}
+.detail-actions.three .secondary-btn,.detail-actions.three .primary-btn{padding-left:8px;padding-right:8px;font-size:10px}
+.budget-suggestion-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.budget-suggestion-row{min-height:58px;padding:10px 11px;border:1px solid var(--line-soft);border-radius:16px;background:rgba(255,255,255,.025);display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center}
+.budget-suggestion-row>span{width:32px;height:32px;border-radius:10px;background:rgba(var(--accent-rgb),.075);display:grid;place-items:center;font-size:15px}
+.budget-suggestion-row strong{display:block;font-size:11px}.budget-suggestion-row small{display:block;margin-top:3px;color:var(--muted);font-size:8.5px}.budget-suggestion-row>b{font-size:11px;font-variant-numeric:tabular-nums}

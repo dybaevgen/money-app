@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '8.0.0';
+const APP_VERSION = '8.2.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -64,7 +64,7 @@ function accountGlyph(type){
 }
 
 const defaultState = () => ({
-  version: 8,
+  version: 9,
   settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
@@ -212,7 +212,7 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:8,
+    version:9,
     settings:{
       ...d.settings,
       ...(s.settings||{}),
@@ -221,7 +221,7 @@ function normalizeState(s){
     },
     accounts:(Array.isArray(s.accounts)?s.accounts:d.accounts).map(a=>({...a,protected:Boolean(a.protected),lastReconciledAt:a.lastReconciledAt||null})),
     categories:Array.isArray(s.categories)?s.categories:d.categories,
-    transactions:Array.isArray(s.transactions)?s.transactions:[],
+    transactions:Array.isArray(s.transactions)?s.transactions.map(t=>({...t,isAdjustment:Boolean(t.isAdjustment)||t.note==='Корректировка после сверки баланса'})):[],
     plans:Array.isArray(s.plans)?s.plans.map(p=>({
       ...p,
       frequency:['once','weekly','biweekly','monthly','quarterly','yearly'].includes(p.frequency)?p.frequency:'once',
@@ -267,6 +267,12 @@ function monthLabel(d){ return new Intl.DateTimeFormat('ru-RU',{month:'short'}).
 function addMonths(date,n){ const d=new Date(date); d.setDate(1); d.setMonth(d.getMonth()+n); return d; }
 function endOfMonth(d){ return new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59,999); }
 function parseISO(s){ return new Date(`${s}T12:00:00`); }
+function calendarDayDiff(a,b){
+  const x=new Date(a),y=new Date(b);
+  const ux=Date.UTC(x.getFullYear(),x.getMonth(),x.getDate());
+  const uy=Date.UTC(y.getFullYear(),y.getMonth(),y.getDate());
+  return Math.round((uy-ux)/86400000);
+}
 
 function account(id){ return state.accounts.find(a=>a.id===id); }
 function category(id){ return state.categories.find(c=>c.id===id); }
@@ -279,8 +285,14 @@ function accountBalance(id){
     if (t.type==='income' && t.accountId===id) bal += amt;
     if (t.type==='expense' && t.accountId===id) bal -= amt;
     if (t.type==='transfer'){
-      if (t.accountId===id) bal -= amt;
-      if (t.toAccountId===id) bal += amt;
+      // A malformed transfer must never silently reduce total capital as if it
+      // were an expense. Ignore invalid transfers in balances and let the data
+      // integrity check surface them for correction.
+      const fromValid=Boolean(account(t.accountId)),toValid=Boolean(account(t.toAccountId));
+      if(fromValid&&toValid&&t.accountId!==t.toAccountId){
+        if (t.accountId===id) bal -= amt;
+        if (t.toAccountId===id) bal += amt;
+      }
     }
   }
   return bal;
@@ -299,22 +311,51 @@ function completionFor(planId,date){
   return state.planCompletions.find(x=>occurrenceKey(x.planId,x.date)===key)||null;
 }
 
+function isAnalyticalTransaction(t){
+  return Boolean(t) && !t.isAdjustment;
+}
 function monthTotals(key=monthKey()){
   let income=0, expense=0;
   for (const t of state.transactions){
-    if ((t.date||'').slice(0,7)!==key) continue;
+    if (!isAnalyticalTransaction(t) || (t.date||'').slice(0,7)!==key) continue;
     if (t.type==='income') income += Number(t.amount)||0;
     if (t.type==='expense') expense += Number(t.amount)||0;
   }
   return {income,expense,net:income-expense};
 }
-
-function actualAverage(type,days=90){
-  const now = new Date();
-  const start = new Date(now); start.setDate(start.getDate()-days);
-  const total = state.transactions.filter(t=>t.type===type && parseISO(t.date)>=start && parseISO(t.date)<=now).reduce((sum,t)=>sum+Number(t.amount||0),0);
-  return total/(days/30.4375);
+function totalsBetween(start,end){
+  const a=new Date(start);a.setHours(0,0,0,0);
+  const b=new Date(end);b.setHours(23,59,59,999);
+  let income=0,expense=0;
+  state.transactions.forEach(t=>{
+    if(!isAnalyticalTransaction(t)||!t.date)return;
+    const d=parseISO(t.date);if(d<a||d>b)return;
+    if(t.type==='income')income+=Number(t.amount)||0;
+    if(t.type==='expense')expense+=Number(t.amount)||0;
+  });
+  return {income,expense,net:income-expense};
 }
+
+function actualAverageInfo(type,days=90){
+  const maxDays=Math.max(30,Number(days)||90);
+  const now=new Date();now.setHours(23,59,59,999);
+  const hardStart=new Date(now);hardStart.setDate(hardStart.getDate()-maxDays+1);hardStart.setHours(0,0,0,0);
+  const rows=state.transactions
+    .filter(t=>isAnalyticalTransaction(t)&&t.type===type&&t.date)
+    .map(t=>({...t,_date:parseISO(t.date)}))
+    .filter(t=>t._date>=hardStart&&t._date<=now)
+    .sort((a,b)=>a._date-b._date);
+  if(!rows.length)return {monthly:0,total:0,observedDays:0,denominatorDays:0};
+  const first=rows[0]._date;
+  const observedDays=Math.max(1,calendarDayDiff(first,now)+1);
+  // With less than a month of data we deliberately do not extrapolate a few
+  // unusual days into an extreme monthly number. Once 30+ days exist, use the
+  // actual covered window up to the requested maximum.
+  const denominatorDays=Math.min(maxDays,Math.max(30,observedDays));
+  const total=rows.reduce((sum,t)=>sum+Number(t.amount||0),0);
+  return {monthly:total/denominatorDays*30.4375,total,observedDays,denominatorDays};
+}
+function actualAverage(type,days=90){ return actualAverageInfo(type,days).monthly; }
 
 function planStart(plan){ return parseISO(plan.date||todayISO()); }
 function planEnd(plan){ return plan.endDate ? parseISO(plan.endDate) : null; }
@@ -383,13 +424,25 @@ function planItemsForMonth(monthDate){
   return items.sort((a,b)=>a.date-b.date);
 }
 
+function forecastBaseForMonth(type,monthDate){
+  const planned=recurringPlanMonthly(type,monthDate);
+  const average=actualAverage(type);
+  if(type==='expense'){
+    // A recurring plan usually contains fixed obligations only. Variable
+    // spending (food, transport, etc.) must not disappear merely because one
+    // recurring expense exists. Use the larger of observed spending and the
+    // explicit recurring plan as a conservative baseline.
+    const amount=Math.max(planned,average);
+    return {amount,planned,average,mode:planned>0&&average>planned?'План + обычные траты':planned>0?'План':'Средний факт'};
+  }
+  // For income, never assume unplanned historical income will certainly repeat
+  // when an explicit recurring income exists. This keeps the forecast cautious.
+  const amount=planned>0?planned:average;
+  return {amount,planned,average,mode:planned>0?'План':'Средний факт'};
+}
 function forecastSeries(months=12, scenario={}){
   const horizon=Math.max(1,Math.min(60,Number(months)||12));
   let balance=totalBalance();
-  const avgIncome=actualAverage('income');
-  const avgExpense=actualAverage('expense');
-  const usePlanIncome=hasRecurringPlan('income');
-  const usePlanExpense=hasRecurringPlan('expense');
   const extraIncome=Math.max(0,Number(scenario.extraIncome)||0);
   const extraExpense=Math.max(0,Number(scenario.extraExpense)||0);
   const oneTimeExpense=Math.max(0,Number(scenario.oneTimeExpense)||0);
@@ -397,15 +450,17 @@ function forecastSeries(months=12, scenario={}){
   const now=new Date();
   const series=[{label:'Сейчас',tooltipLabel:'Сейчас',value:balance,income:0,expense:0}];
   let totalIncome=0,totalExpense=0;
+  let firstIncomeBase=null,firstExpenseBase=null;
   for(let i=1;i<=horizon;i++){
     const d=addMonths(now,i);
-    const recurringIncome=usePlanIncome?recurringPlanMonthly('income',d):avgIncome;
-    const recurringExpense=usePlanExpense?recurringPlanMonthly('expense',d):avgExpense;
+    const incomeBase=forecastBaseForMonth('income',d);
+    const expenseBase=forecastBaseForMonth('expense',d);
+    if(i===1){firstIncomeBase=incomeBase;firstExpenseBase=expenseBase}
     const onceIncome=oncePlansForMonth('income',d);
     const onceExpense=oncePlansForMonth('expense',d);
     const simulatedOnce=i===oneTimeMonth?oneTimeExpense:0;
-    const income=recurringIncome+onceIncome+extraIncome;
-    const expense=recurringExpense+onceExpense+extraExpense+simulatedOnce;
+    const income=incomeBase.amount+onceIncome+extraIncome;
+    const expense=expenseBase.amount+onceExpense+extraExpense+simulatedOnce;
     const events=planItemsForMonth(d).map(({p,date})=>({
       id:p.id,
       date:toISODate(date),
@@ -427,10 +482,10 @@ function forecastSeries(months=12, scenario={}){
   }
   return {
     series,
-    incomeBase:usePlanIncome?recurringPlanMonthly('income',addMonths(now,1)):avgIncome,
-    expenseBase:usePlanExpense?recurringPlanMonthly('expense',addMonths(now,1)):avgExpense,
-    modeIncome:usePlanIncome?'План':'Средний факт',
-    modeExpense:usePlanExpense?'План':'Средний факт',
+    incomeBase:firstIncomeBase?.amount||0,
+    expenseBase:firstExpenseBase?.amount||0,
+    modeIncome:firstIncomeBase?.mode||'Средний факт',
+    modeExpense:firstExpenseBase?.mode||'Средний факт',
     totalIncome,totalExpense
   };
 }
@@ -604,8 +659,12 @@ function allUpcoming30Days(){
 }
 
 function monthRemainingPlans(){
-  const now=new Date(); now.setHours(0,0,0,0);
-  return planOccurrencesBetween(now,endOfMonth(now));
+  const now=new Date();now.setHours(0,0,0,0);
+  // Unpaid events from earlier in the current month are still obligations.
+  // Starting at today made an overdue rent/payment silently disappear from the
+  // month-end outlook.
+  const start=new Date(now.getFullYear(),now.getMonth(),1,0,0,0,0);
+  return planOccurrencesBetween(start,endOfMonth(now));
 }
 
 function monthRemainingSummary(){
@@ -620,17 +679,30 @@ function upcomingExpenses(days=30,{requiredOnly=false}={}){
     .filter(x=>x.p.type==='expense' && (!requiredOnly || x.p.required))
     .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
 }
-function mandatoryExpenses(days=30){ return upcomingExpenses(days,{requiredOnly:true}); }
+function outstandingRequiredPlans(days=30,overdueDays=31){
+  const now=new Date();now.setHours(0,0,0,0);
+  const start=new Date(now);start.setDate(start.getDate()-Math.max(0,Number(overdueDays)||0));
+  const end=new Date(now);end.setDate(end.getDate()+Math.max(0,Number(days)||0));end.setHours(23,59,59,999);
+  return planOccurrencesBetween(start,end).filter(x=>x.p.type==='expense'&&x.p.required);
+}
+function mandatoryExpenses(days=30){
+  return outstandingRequiredPlans(days).reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+}
 function mandatoryFreeImpact(days=30){
-  return upcomingPlans(days)
-    .filter(x=>x.p.type==='expense' && x.p.required && !account(x.p.accountId)?.protected)
+  return outstandingRequiredPlans(days)
+    .filter(x=>!account(x.p.accountId)?.protected)
+    .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+}
+function mandatoryImpactBetween(start,end){
+  return planOccurrencesBetween(start,end)
+    .filter(x=>x.p.type==='expense'&&x.p.required&&!account(x.p.accountId)?.protected)
     .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
 }
 function freeBalance(){ return totalBalance()-reservedBalance()-mandatoryFreeImpact(30); }
 
 function expenseByCategory(key=monthKey()){
   const map={};
-  state.transactions.filter(t=>t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>map[t.categoryId]=(map[t.categoryId]||0)+Number(t.amount||0));
+  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>map[t.categoryId]=(map[t.categoryId]||0)+Number(t.amount||0));
   return Object.entries(map).map(([id,value])=>({id,name:category(id)?.name||'Без категории',icon:category(id)?.icon||'•',value})).sort((a,b)=>b.value-a.value);
 }
 
@@ -645,7 +717,7 @@ function monthlySeries(count=6){
 
 function budgetSnapshot(key=monthKey()){
   const spentMap={};
-  state.transactions.filter(t=>t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
+  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
     spentMap[t.categoryId]=(spentMap[t.categoryId]||0)+Number(t.amount||0);
   });
   return state.budgets.map(b=>{
@@ -655,11 +727,59 @@ function budgetSnapshot(key=monthKey()){
   }).sort((a,b)=>b.ratio-a.ratio);
 }
 
+function budgetPaceSnapshot(key=monthKey()){
+  const rows=budgetSnapshot(key).filter(b=>b.limit>0);
+  if(!rows.length)return null;
+  const now=new Date();
+  const currentKey=monthKey(now);
+  const inCurrent=key===currentKey;
+  const base=inCurrent?now:parseISO(`${key}-01`);
+  const daysInMonth=lastDayOfMonth(base.getFullYear(),base.getMonth());
+  const elapsed=inCurrent?Math.max(1,Math.min(daysInMonth,now.getDate())):daysInMonth;
+  const daysLeft=inCurrent?Math.max(1,daysInMonth-now.getDate()+1):0;
+  const totalLimit=rows.reduce((s,b)=>s+b.limit,0);
+  const totalSpent=rows.reduce((s,b)=>s+b.spent,0);
+  const remaining=totalLimit-totalSpent;
+  const expectedSpent=totalLimit*(elapsed/daysInMonth);
+  const paceRatio=expectedSpent>0?totalSpent/expectedSpent:0;
+  const projected=elapsed>0?totalSpent/elapsed*daysInMonth:totalSpent;
+  return {rows,totalLimit,totalSpent,remaining,expectedSpent,paceRatio,projected,daysInMonth,elapsed,daysLeft,dailyRemaining:daysLeft?Math.max(0,remaining)/daysLeft:0};
+}
+
+function budgetSuggestions(months=3){
+  const earliest=[...state.transactions].filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&t.date).map(t=>t.date).sort()[0]||'';
+  if(!earliest)return [];
+  const now=new Date();
+  const keys=[];
+  for(let i=Math.max(1,Number(months)||3);i>=1;i--){
+    const d=addMonths(now,-i);
+    const key=monthKey(d);
+    if(key>=earliest.slice(0,7))keys.push(key);
+  }
+  if(keys.length<2)return [];
+  const existing=new Set(state.budgets.map(b=>b.categoryId));
+  const out=[];
+  state.categories.filter(c=>c.type==='expense'&&!existing.has(c.id)).forEach(c=>{
+    const values=keys.map(key=>state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&t.categoryId===c.id&&(t.date||'').slice(0,7)===key).reduce((s,t)=>s+Number(t.amount||0),0));
+    const active=values.filter(v=>v>.005).length;
+    if(active<2)return;
+    const average=values.reduce((s,v)=>s+v,0)/values.length;
+    if(average<5)return;
+    const suggested=Math.ceil(average/5)*5;
+    out.push({categoryId:c.id,category:c,average,suggested,months:keys.length});
+  });
+  return out.sort((a,b)=>b.average-a.average).slice(0,10);
+}
+
 function monthsUntil(dateISO){
   if(!dateISO)return null;
-  const d=parseISO(dateISO), now=new Date();
-  const months=(d.getFullYear()-now.getFullYear())*12+(d.getMonth()-now.getMonth());
-  return Math.max(1,months+(d.getDate()>=now.getDate()?0:0));
+  const d=parseISO(dateISO),now=new Date();
+  now.setHours(12,0,0,0);
+  const days=Math.max(0,(d-now)/86400000);
+  // Monthly goal pace should reflect the actual time left, not only the
+  // difference between calendar month numbers (Aug 31 -> Dec 1 is ~3 months,
+  // not four full months).
+  return Math.max(1,days/30.4375);
 }
 function goalMonthlyNeed(goal){
   const remain=Math.max(0,Number(goal.target||0)-Number(goal.saved||0));
@@ -671,16 +791,27 @@ function savingsRateSeries(count=6){
 }
 function previousMonthKey(){ return monthKey(addMonths(new Date(),-1)); }
 function monthComparison(){
-  const cur=monthTotals(), prev=monthTotals(previousMonthKey());
+  const now=new Date();now.setHours(23,59,59,999);
+  const curStart=new Date(now.getFullYear(),now.getMonth(),1,0,0,0,0);
+  const prevDate=addMonths(now,-1);
+  const prevStart=new Date(prevDate.getFullYear(),prevDate.getMonth(),1,0,0,0,0);
+  const compareDay=Math.min(now.getDate(),lastDayOfMonth(prevDate.getFullYear(),prevDate.getMonth()));
+  const curEnd=new Date(now.getFullYear(),now.getMonth(),compareDay,23,59,59,999);
+  const prevEnd=new Date(prevDate.getFullYear(),prevDate.getMonth(),compareDay,23,59,59,999);
+  const cur=totalsBetween(curStart,curEnd),prev=totalsBetween(prevStart,prevEnd);
   return {
     current:cur,previous:prev,
     expenseDelta:prev.expense?((cur.expense-prev.expense)/prev.expense*100):null,
-    incomeDelta:prev.income?((cur.income-prev.income)/prev.income*100):null
+    incomeDelta:prev.income?((cur.income-prev.income)/prev.income*100):null,
+    throughDay:compareDay,
+    label:`за первые ${compareDay} дн. месяца`
   };
 }
+
 function financialRunway(){
-  const avg=actualAverage('expense');
-  return avg>0?Math.max(0,(totalBalance()-reservedBalance())/avg):null;
+  const nextMonth=addMonths(new Date(),1);
+  const baseline=forecastBaseForMonth('expense',nextMonth).amount;
+  return baseline>0?Math.max(0,(totalBalance()-reservedBalance())/baseline):null;
 }
 
 
@@ -691,32 +822,43 @@ function lastTransactionDate(){
 function daysSince(date){
   if(!date)return null;
   const a=new Date();a.setHours(0,0,0,0);const b=new Date(date);b.setHours(0,0,0,0);
-  return Math.max(0,Math.floor((a-b)/86400000));
+  return Math.max(0,calendarDayDiff(b,a));
 }
 function nextIncomeOccurrence(){
   return upcomingPlans(90).find(x=>x.p.type==='income')||null;
 }
-function safeDailySpend(){
+function nextIncomeStatus(){
   const next=nextIncomeOccurrence();
-  const free=Math.max(0,freeBalance());
   if(!next)return null;
   const today=new Date();today.setHours(0,0,0,0);
-  const days=Math.max(1,Math.ceil((next.date-today)/86400000));
-  return {amount:free/days,days,date:next.date,title:next.p.title||planCategory(next.p)?.name||'Следующий доход'};
+  const end=new Date(next.date);end.setHours(23,59,59,999);
+  const days=Math.max(0,calendarDayDiff(today,next.date));
+  const overdueStart=new Date(today);overdueStart.setDate(overdueStart.getDate()-31);
+  const required=mandatoryImpactBetween(overdueStart,end);
+  const liquid=Math.max(0,totalBalance()-reservedBalance());
+  const afterRequired=liquid-required;
+  return {
+    days,date:next.date,
+    title:next.p.title||planCategory(next.p)?.name||'Следующий доход',
+    amount:Number(next.p.amount)||0,
+    required,
+    afterRequired,
+    shortage:Math.max(0,-afterRequired)
+  };
 }
 function duplicateCandidates(){
   const map=new Map();
-  state.transactions.filter(t=>t.type!=='transfer').forEach(t=>{
+  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type!=='transfer').forEach(t=>{
     const key=[t.date,t.type,Number(t.amount||0).toFixed(2),t.accountId||'',t.categoryId||''].join('|');
     const arr=map.get(key)||[];arr.push(t);map.set(key,arr);
   });
   return [...map.values()].filter(g=>g.length>1);
 }
 function unusualExpense(){
-  const vals=state.transactions.filter(t=>t.type==='expense').map(t=>Number(t.amount)||0).filter(v=>v>0).sort((a,b)=>a-b);
+  const vals=state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense').map(t=>Number(t.amount)||0).filter(v=>v>0).sort((a,b)=>a-b);
   if(vals.length<6)return null;
   const median=vals[Math.floor(vals.length/2)]||0;
-  return [...state.transactions].filter(t=>t.type==='expense'&&Number(t.amount)>Math.max(150,median*3.5)).sort((a,b)=>Number(b.amount)-Number(a.amount))[0]||null;
+  return [...state.transactions].filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&Number(t.amount)>Math.max(150,median*3.5)).sort((a,b)=>Number(b.amount)-Number(a.amount))[0]||null;
 }
 function accountsNeedingReconcile(){
   const now=Date.now();
@@ -729,18 +871,21 @@ function accountsNeedingReconcile(){
 }
 function financialInsights(){
   const now=new Date();
-  const months=[2,1,0].map(i=>monthTotals(monthKey(addMonths(now,-i))));
+  // Trend detection uses three completed months. Comparing an unfinished
+  // current month with full prior months creates false "growth"/"decline".
+  const months=[3,2,1].map(i=>monthTotals(monthKey(addMonths(now,-i))));
   const rising=months[0].expense>0&&months[1].expense>months[0].expense&&months[2].expense>months[1].expense;
-  const next=addMonths(now,1); const req=planItemsForMonth(next).filter(x=>x.p.type==='expense'&&x.p.required).reduce((s,x)=>s+Number(x.p.amount||0),0);
-  const inc=hasRecurringPlan('income')?recurringPlanMonthly('income',next):actualAverage('income');
+  const next=addMonths(now,1);
+  const req=planItemsForMonth(next).filter(x=>x.p.type==='expense'&&x.p.required).reduce((sum,x)=>sum+Number(x.p.amount||0),0);
+  const inc=forecastBaseForMonth('income',next).amount;
   const cats=expenseByCategory();
   const out=[];
-  if(rising)out.push({title:'Расходы растут 3 месяца подряд',sub:`Последний месяц: ${fmtMajor(months[2].expense)}. Проверьте, это разовые траты или новый уровень расходов.`,tone:'warn'});
-  if(inc>0&&req>0)out.push({title:`${Math.round(req/inc*100)}% следующего дохода уже занято`,sub:`Обязательные платежи следующего месяца: ${fmtMajor(req)}.`,tone:req/inc>.7?'warn':'info'});
+  if(rising)out.push({title:'Расходы росли 3 полных месяца подряд',sub:`Последний завершённый месяц: ${fmtMajor(months[2].expense)}. Проверьте, это разовые траты или новый уровень расходов.`,tone:'warn'});
+  if(inc>0&&req>0)out.push({title:`${Math.round(req/inc*100)}% расчётного дохода следующего месяца уже занято`,sub:`Обязательные платежи следующего месяца: ${fmtMajor(req)}.`,tone:req/inc>.7?'warn':'info'});
   if(cats[0])out.push({title:`Главная категория месяца — ${cats[0].name}`,sub:`На неё ушло ${fmtMajor(cats[0].value)}.`,tone:'info'});
   const h=monthlyCashflowHealth(forecastSeries(6).series);
   if(h.hasDeficit)out.push({title:'В прогнозе есть дефицитный месяц',sub:`Для закрытия худшего разрыва нужно около ${fmtMajor(h.required)} дополнительного дохода в месяц.`,tone:'warn'});
-  else out.push({title:'Ближайшие 6 месяцев сбалансированы',sub:'В базовом прогнозе нет месяца, где расходы выше доходов.',tone:'good'});
+  else out.push({title:'Ближайшие 6 месяцев сбалансированы',sub:'В базовом прогнозе нет месяца, где расчётные расходы выше доходов.',tone:'good'});
   return out.slice(0,4);
 }
 
@@ -753,7 +898,9 @@ function attentionItems(){
   if(overdue.length)items.push({id:'overdue',level:'warn',icon:'calendar',title:`Просрочено планов: ${overdue.length}`,sub:'Проведите, перенесите или удалите событие.',action:'open-overdue'});
   const over=budgetSnapshot().filter(b=>b.ratio>1);
   if(over.length)items.push({id:'budgets',level:'warn',icon:'chart',title:`Перерасход бюджетов: ${over.length}`,sub:`Самый большой — ${over[0].category?.name||'категория'}.`,action:'open-budgets'});
-  if(freeBalance()<0)items.push({id:'free',level:'danger',icon:'info',title:'Свободные деньги ниже нуля',sub:'Обязательства ближайших 30 дней превышают доступный остаток.',action:'explain-free'});
+  const pace=budgetPaceSnapshot();
+  if(!over.length&&pace&&pace.daysLeft>=5&&pace.paceRatio>1.25)items.push({id:'budget-pace',level:'info',icon:'chart',title:'Расходы идут быстрее бюджетного темпа',sub:`По лимитам потрачено ${fmtMajor(pace.totalSpent)} из ${fmtMajor(pace.totalLimit)}.`,action:'open-budgets'});
+  if(freeBalance()<0)items.push({id:'free',level:'danger',icon:'info',title:'Свободные деньги ниже нуля',sub:'Непроведённые обязательства и ближайшие платежи превышают доступный остаток.',action:'explain-free'});
   const health=monthlyCashflowHealth(forecastSeries(3).series);
   if(health.hasDeficit)items.push({id:'cashflow',level:'warn',icon:'chart',title:`Дефицит до ${fmtMajor(health.required)} / мес.`,sub:'В одном из ближайших месяцев расходы выше доходов.',action:'explain-cashflow'});
   const age=daysSince(lastTransactionDate());
@@ -776,11 +923,12 @@ function explanationData(key){
   const forecast=forecastSeries(3);const health=monthlyCashflowHealth(forecast.series);
   const map={
     capital:{title:'Общий капитал',lead:fmtMajor(total),body:`Это сумма остатков всех счетов и наличных. Переводы между своими счетами капитал не меняют.`},
-    free:{title:'Свободные деньги',lead:fmtMajor(free),body:`Расчёт: капитал ${fmtMajor(total)} − резерв ${fmtMajor(reserved)} − обязательные платежи ближайших 30 дней ${fmtMajor(mandatory)}. Это ориентир, а не банковский лимит.`},
+    free:{title:'Свободные деньги',lead:fmtMajor(free),body:`Расчёт: капитал ${fmtMajor(total)} − резерв ${fmtMajor(reserved)} − непроведённые обязательные платежи (просроченные до 31 дня и ближайшие 30 дней) ${fmtMajor(mandatory)}. Это консервативный ориентир, а не банковский лимит.`},
     reserve:{title:'Зарезервировано',lead:fmtMajor(reserved),body:`Сюда входят защищённые счета (${fmtMajor(protectedBalance())}) и дополнительный резерв (${fmtMajor(explicitReserve())}). Эти деньги остаются частью капитала.`},
-    month:{title:'Прогноз конца месяца',lead:fmtMajor(monthRemainingSummary().projected),body:`Текущий капитал ${fmtMajor(total)} + оставшиеся плановые доходы ${fmtMajor(monthRemainingSummary().income)} − оставшиеся плановые расходы ${fmtMajor(monthRemainingSummary().expense)}.`},
-    savings:{title:'Savings rate',lead:m.income?`${Math.round(m.net/m.income*100)}%`:'—',body:'Доля дохода текущего месяца, которая осталась после расходов. Формула: (доходы − расходы) ÷ доходы.'},
-    runway:{title:'Финансовый запас',lead:runway===null?'—':`${runway.toFixed(1)} мес.`,body:'Сколько месяцев можно покрывать средние расходы последних 90 дней доступным капиталом после резерва.'},
+    month:{title:'По плану к концу месяца',lead:fmtMajor(monthRemainingSummary().projected),body:`Текущий капитал ${fmtMajor(total)} + оставшиеся плановые доходы ${fmtMajor(monthRemainingSummary().income)} − оставшиеся плановые расходы ${fmtMajor(monthRemainingSummary().expense)}. Незапланированные будущие покупки сюда не добавляются.`},
+    savings:{title:'Норма накопления',lead:m.income?`${Math.round(m.net/m.income*100)}%`:'—',body:'Доля дохода текущего месяца, которая осталась после расходов. Формула: (доходы − расходы) ÷ доходы.'},
+    runway:{title:'Запас без новых доходов',lead:runway===null?'—':`${runway.toFixed(1)} мес.`,body:'Сколько месяцев доступный капитал после резерва покрывает текущий расчётный уровень расходов, если новые доходы полностью прекратятся.'},
+    nextIncome:(()=>{const n=nextIncomeStatus();return n?{title:'До следующего дохода',lead:`${n.days} дн.`,body:`Следующий плановый доход: ${fmtMajor(n.amount)} · ${n.title}. До него обязательных платежей, уменьшающих свободные деньги: ${fmtMajor(n.required)}.${n.shortage>0?` Не хватает ${fmtMajor(n.shortage)} до этого дохода.`:''}`}:{title:'До следующего дохода',lead:'—',body:'В ближайшие 90 дней плановый доход не найден.'}})(),
     cashflow:{title:'Месячный дефицит',lead:health.hasDeficit?`${fmtMajor(health.required)} / мес.`:'Дефицита нет',body:health.hasDeficit?'Берётся самый дефицитный месяц ближайших трёх: его расходы минус доходы. Это не означает, что весь капитал станет отрицательным.':'Во всех ближайших трёх месяцах расчётные доходы не ниже расходов.'}
   };
   return map[key]||map.capital;
@@ -895,7 +1043,7 @@ function bindInteractiveCharts(){
     const data=chartRegistry.get(el.dataset.chartId); if(!data?.length)return;
     const svg=$('svg',el), cursor=$('.chart-cursor',el), dot=$('.chart-cursor-dot',el), tip=$('.chart-tooltip',el);
     let activePointer=null,lastIdx=-1,pendingX=null,moveRAF=0;
-    const vb=svg.viewBox.baseVal, pl=56, pr=18, pt=16, pb=34;
+    const vb=svg.viewBox.baseVal, pl=46, pr=12, pt=16, pb=46;
     const values=data.map(x=>Number(x.value)||0);
     let rawMin=Math.min(...values), rawMax=Math.max(...values);
     const rawRange=Math.max(1,rawMax-rawMin);
@@ -1475,19 +1623,21 @@ function renderOverview(){
   const total=totalBalance();
   const reserved=reservedBalance();
   const mandatory=mandatoryExpenses(30);
+  const mandatoryImpact=mandatoryFreeImpact(30);
   const free=freeBalance();
   const monthPlan=monthRemainingSummary();
   const monthEnd=monthPlan.projected;
   const timeline=primaryUpcomingPlans().slice(0,Math.max(3,Math.min(8,Number(state.settings.upcomingCount)||5)));
   const budgets=budgetSnapshot().slice(0,3);
+  const budgetPace=budgetPaceSnapshot();
   const goals=state.goals.slice(0,2);
   const forecast=forecastSeries(6);
   const runway=financialRunway();
   const comparison=monthComparison();
-  const savingsRate=m.income?m.net/m.income*100:0;
+  const savingsRate=m.income?m.net/m.income*100:null;
   const noData=state.transactions.length===0 && state.accounts.every(a=>Number(a.openingBalance||0)===0);
   const attention=attentionItems();
-  const daily=safeDailySpend();
+  const nextIncome=nextIncomeStatus();
   const focus=state.settings.dashboardMode==='focus';
   const adaptive=state.settings.adaptiveHome!==false;
   $('#main').innerHTML=`
@@ -1498,18 +1648,20 @@ function renderOverview(){
         <div><span>Свободно <button class="inline-info" data-explain="free" aria-label="Как считаются свободные деньги">${uiIcon('info')}</button></span><strong class="${free>=0?'positive':'negative'}">${fmtMajor(free)}</strong></div>
         <div><span>Зарезервировано <button class="inline-info" data-explain="reserve" aria-label="Как считается резерв">${uiIcon('info')}</button></span><strong>${fmtMajor(reserved)}</strong></div>
       </div>
-      <div class="capital-footnote">${mandatory>0?`В ближайшие 30 дней обязательных платежей на ${fmtMajor(mandatory)}.`:'Обязательных платежей на ближайшие 30 дней нет.'}</div>
+      <div class="capital-footnote">${mandatory>0?(mandatory!==mandatoryImpact?`Непроведённых обязательных платежей: ${fmtMajor(mandatory)}; из них ${fmtMajor(mandatoryImpact)} уменьшают свободные деньги.`:`Непроведённых обязательных платежей: ${fmtMajor(mandatory)}.`):'Просроченных и ближайших обязательных платежей нет.'}</div>
     </section>
 
     ${adaptive&&attention.length?`<button class="attention-card ${attention.some(x=>x.level==='danger')?'danger':''}" data-action="open-inbox"><span class="attention-icon">${uiIcon('info')}</span><div><small>Требует внимания</small><strong>${attention[0].title}</strong><span>${attention.length>1?`И ещё ${attention.length-1}`:attention[0].sub}</span></div><b>${attention.length}</b>${uiIcon('chevron')}</button>`:''}
 
     <section class="month-outlook clean-surface">
-      <div class="month-outlook-main"><small>Прогноз конца месяца <button class="inline-info" data-explain="month" aria-label="Как считается прогноз">${uiIcon('info')}</button></small><strong class="${monthEnd>=total?'positive':'negative'}">${fmtMajor(monthEnd)}</strong></div>
+      <div class="month-outlook-main"><small>По плану к концу месяца <button class="inline-info" data-explain="month" aria-label="Как считается прогноз">${uiIcon('info')}</button></small><strong class="${monthEnd>=total?'positive':'negative'}">${fmtMajor(monthEnd)}</strong></div>
       <div class="month-outlook-flow"><span class="positive">+${fmtMajor(monthPlan.income)}</span><span>−${fmtMajor(monthPlan.expense)}</span></div>
       <button data-tab-link="plan" class="circle-link" aria-label="Открыть план">${uiIcon('chevron')}</button>
     </section>
 
-    ${daily?`<div class="daily-guide"><span>${uiIcon('calendar')}</span><div><small>До следующего дохода · ${daily.days} дн.</small><strong>Ориентир ${fmtMajor(daily.amount)} в день</strong></div><button data-explain="free" aria-label="Подробнее">${uiIcon('info')}</button></div>`:''}
+    ${nextIncome?`<div class="daily-guide ${nextIncome.shortage>0?'warning':''}"><span>${uiIcon('calendar')}</span><div><small>До следующего дохода · ${nextIncome.days} дн.</small><strong>${fmtMajor(nextIncome.amount)} · ${esc(nextIncome.title)}</strong>${nextIncome.required>0?`<em>До него обязательных платежей: ${fmtMajor(nextIncome.required)}</em>`:''}${nextIncome.shortage>0?`<em class="negative">Не хватает ${fmtMajor(nextIncome.shortage)}</em>`:''}</div><button data-explain="nextIncome" aria-label="Подробнее">${uiIcon('info')}</button></div>`:''}
+
+    ${budgetPace?`<button class="budget-pace-card ${budgetPace.remaining<0?'over':budgetPace.paceRatio>1.2?'warning':''}" data-tab-link="plan"><span class="budget-pace-icon">${uiIcon('chart')}</span><div><small>Темп бюджетов · ${budgetPace.rows.length} катег.</small><strong>${budgetPace.remaining>=0?`Осталось ${fmtMajor(budgetPace.remaining)}`:`Перерасход ${fmtMajor(Math.abs(budgetPace.remaining))}`}</strong><em>${budgetPace.remaining>=0?`По установленным лимитам ≈ ${fmtMajor(budgetPace.dailyRemaining)} / день на ${budgetPace.daysLeft} дн.`:`Лимиты месяца уже превышены.`}</em></div>${uiIcon('chevron')}</button>`:''}
 
     ${noData?`<section class="section"><div class="empty-inline">Добавьте остатки по счетам в <b>Ещё → Счета и кошельки</b>, чтобы расчёты стали реальными.</div></section>`:''}
 
@@ -1536,7 +1688,7 @@ function renderOverview(){
         <div><small>Расход</small><strong>${fmtMajor(m.expense)}</strong></div>
         <div><small>Осталось</small><strong class="${m.net>=0?'positive':'negative'}">${fmtMajor(m.net)}</strong></div>
       </div>
-      <p class="subtle-copy">${comparison.expenseDelta===null?'Сравнение появится после второго месяца данных.':`Расходы ${comparison.expenseDelta>0?'выше':'ниже'} прошлого месяца на ${Math.abs(Math.round(comparison.expenseDelta))}%. Savings rate: ${Math.round(savingsRate)}%.`}</p>
+      <p class="subtle-copy">${comparison.expenseDelta===null?'Сравнение появится после данных за предыдущий месяц.':`Расходы ${comparison.expenseDelta>0?'выше':'ниже'} ${comparison.label} на ${Math.abs(Math.round(comparison.expenseDelta))}%. Норма накопления: ${savingsRate===null?'—':`${Math.round(savingsRate)}%`}.`}</p>
     </section>
 
     ${budgets.length?`<section class="section"><div class="section-head"><h2>Бюджеты</h2><button data-tab-link="plan">Все</button></div><div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div></section>`:''}
@@ -1545,7 +1697,7 @@ function renderOverview(){
 
     <section class="section">
       <div class="section-head"><h2>Прогноз капитала</h2><button data-tab-link="plan">Сценарии</button></div>
-      <div class="chart-surface"><div class="chart">${svgLine(forecast.series,{interactive:true})}</div><div class="chart-footer"><span>Через 6 месяцев <b>${fmtMajor(forecast.series.at(-1).value)}</b></span><span>Запас <b>${runway===null?'—':`${runway.toFixed(1)} мес.`}</b> <button class="inline-info" data-explain="runway" aria-label="Как считается запас">${uiIcon('info')}</button></span></div></div>
+      <div class="chart-surface"><div class="chart">${svgLine(forecast.series,{interactive:true})}</div><div class="chart-footer"><span>Через 6 месяцев <b>${fmtMajor(forecast.series.at(-1).value)}</b></span><span>Без доходов <b>${runway===null?'—':`${runway.toFixed(1)} мес.`}</b> <button class="inline-info" data-explain="runway" aria-label="Как считается запас">${uiIcon('info')}</button></span></div></div>
     </section>`;
   bindCommonActions();
   bindInteractiveCharts();
@@ -1555,7 +1707,7 @@ function accountTypeName(type){ return ({card:'Банковская карта',
 function txRow(t){
   const a=account(t.accountId), c=category(t.categoryId), to=account(t.toAccountId);
   const icon=t.type==='transfer'?uiIcon('transfer'):(c?.icon||(t.type==='income'?'＋':'−'));
-  const title=t.type==='transfer'?`${a?.name||'Счёт'} → ${to?.name||'Счёт'}`:(c?.name||'Без категории');
+  const title=t.isAdjustment?'Корректировка баланса':t.type==='transfer'?`${a?.name||'Счёт'} → ${to?.name||'Счёт'}`:(c?.name||'Без категории');
   const sub=[fmtDate(t.date),t.note,a?.name].filter(Boolean).join(' · ');
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
   return `<button class="tx-item" data-tx="${t.id}" style="width:100%;color:inherit;text-align:left"><div class="tx-icon ${t.type} ${t.type==='transfer'?'system-glyph':''}">${icon}</div><div class="item-main"><div class="item-title">${esc(title)}</div><div class="item-sub">${esc(sub)}</div></div><div class="item-amount ${t.type==='income'?'positive':t.type==='expense'?'expense-amount':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</div></button>`;
@@ -1573,7 +1725,7 @@ function txMatchesQuery(t,raw){
   if(monthToken && (t.date||'').slice(5,7)!==months[monthToken])return false;
   const cleaned=monthToken?q.replace(monthToken,'').trim():q;
   if(!cleaned)return true;
-  const hay=[t.merchant,t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
+  const hay=[t.merchant,t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.isAdjustment?'корректировка':t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
   return cleaned.split(/\s+/).every(part=>hay.includes(part));
 }
 function transactionGroups(txs){
@@ -1590,11 +1742,12 @@ function openTransactionDetail(t){
   const c=category(t.categoryId),a=account(t.accountId),to=account(t.toAccountId);
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
   openSheet(`<div class="sheet-head"><h3>Операция</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
-    <div class="detail-hero"><small>${t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
+    <div class="detail-hero"><small>${t.isAdjustment?'Корректировка':t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
     <div class="detail-list">${t.type==='transfer'?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`:`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>`}${t.merchant?`<div><span>Получатель</span><strong>${esc(t.merchant)}</strong></div>`:''}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}</div>
-    <div class="detail-actions"><button class="secondary-btn" id="detailRepeat">Повторить</button><button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
+    <div class="detail-actions ${!t.isAdjustment&&t.type!=='transfer'?'three':''}">${t.isAdjustment?'':`<button class="secondary-btn" id="detailRepeat">Повторить</button>`}${!t.isAdjustment&&t.type!=='transfer'?'<button class="secondary-btn" id="detailToPlan">В план</button>':''}<button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
   $('#detailEdit').onclick=()=>openTransactionSheet(t,t.type);
-  $('#detailRepeat').onclick=()=>openTransactionSheet(null,t.type,t);
+  const repeat=$('#detailRepeat');if(repeat)repeat.onclick=()=>openTransactionSheet(null,t.type,t);
+  const toPlan=$('#detailToPlan');if(toPlan)toPlan.onclick=()=>{const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);openPlanSheet(null,toISODate(tomorrow),{type:t.type,title:t.merchant||c?.name||'',amount:t.amount,categoryId:t.categoryId,accountId:t.accountId,frequency:'once',required:false})};
   $('#detailDelete').onclick=()=>{closeSheet();deleteTransactionWithUndo(t)};
 }
 function openAccountDetail(a){
@@ -1609,12 +1762,12 @@ function openReconcileSheet(a){
   openSheet(`<div class="sheet-head"><h3>Сверить баланс</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><form id="reconcileForm"><div class="field"><label>В приложении</label><input value="${esc(current.toFixed(2))}" disabled></div><div class="field"><label>Реальный баланс</label><input id="realBalance" name="real" type="number" step="0.01" inputmode="decimal" value="${esc(current.toFixed(2))}" required></div><div class="reconcile-preview" id="reconcilePreview">Разницы нет.</div><button class="primary-btn" type="submit">Сверить</button></form>`);
   const input=$('#realBalance'),preview=$('#reconcilePreview');
   const update=()=>{const real=Number(input.value);const diff=real-current;preview.textContent=Math.abs(diff)<.005?'Разницы нет.':`Корректировка: ${fmt(diff,true)}`;preview.className=`reconcile-preview ${diff<0?'negative':diff>0?'positive':''}`};input.oninput=update;update();
-  $('#reconcileForm').onsubmit=e=>{e.preventDefault();const real=Number(new FormData(e.currentTarget).get('real'));if(!Number.isFinite(real))return;const diff=real-current;if(Math.abs(diff)<.005){state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);persist();closeSheet();showToast('Баланс совпадает · счёт сверён');return}const previous=structuredClone(state);state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:diff>0?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id),note:'Корректировка после сверки баланса',createdAt:Date.now()});closeSheet();render({motion:'refresh'});showToast(`Баланс скорректирован на ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})});persist().catch(()=>{state=previous;render({motion:'none'});showToast('Не удалось сохранить корректировку')})};
+  $('#reconcileForm').onsubmit=async e=>{e.preventDefault();const real=Number(new FormData(e.currentTarget).get('real'));if(!Number.isFinite(real))return;const diff=real-current;const previous=structuredClone(state);state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);if(Math.abs(diff)>=.005)state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:diff>0?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id),note:'Корректировка после сверки баланса',isAdjustment:true,createdAt:Date.now()});try{await persist();closeSheet();render({motion:'refresh'});if(Math.abs(diff)<.005)showToast('Баланс совпадает · счёт сверён');else showToast(`Баланс скорректирован на ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})})}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить сверку')}};
 }
 function openPlanDetail(p){
   if(!p)return;
   const c=planCategory(p),next=nextOccurrence(p,new Date());
-  openSheet(`<div class="sheet-head"><h3>${esc(p.title||c?.name||'План')}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="detail-hero"><small>${p.type==='income'?'Плановый доход':'Плановый расход'}</small><strong class="${p.type==='income'?'positive':''}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</strong><span>${next?`Следующее: ${esc(fmtDate(toISODate(next)))}`:'Нет будущих событий'}</span></div><div class="detail-list"><div><span>Повтор</span><strong>${p.frequency==='monthly'?'Каждый месяц':'Один раз'}</strong></div><div><span>Счёт</span><strong>${esc(account(p.accountId)?.name||'—')}</strong></div>${p.type==='expense'?`<div><span>Обязательный</span><strong>${p.required?'Да':'Нет'}</strong></div>`:''}</div><button class="primary-btn" id="planEdit">Изменить план</button>`);
+  openSheet(`<div class="sheet-head"><h3>${esc(p.title||c?.name||'План')}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="detail-hero"><small>${p.type==='income'?'Плановый доход':'Плановый расход'}</small><strong class="${p.type==='income'?'positive':''}">${fmt(p.type==='income'?Number(p.amount):-Number(p.amount),true)}</strong><span>${next?`Следующее: ${esc(fmtDate(toISODate(next)))}`:'Нет будущих событий'}</span></div><div class="detail-list"><div><span>Повтор</span><strong>${esc(frequencyLabel(p.frequency))}</strong></div><div><span>Счёт</span><strong>${esc(account(p.accountId)?.name||'—')}</strong></div>${p.type==='expense'?`<div><span>Обязательный</span><strong>${p.required?'Да':'Нет'}</strong></div>`:''}</div><button class="primary-btn" id="planEdit">Изменить план</button>`);
   $('#planEdit').onclick=()=>openPlanSheet(p);
 }
 function openBudgetDetail(b){
@@ -1645,7 +1798,7 @@ function openQuickCapture(){
 
 function renderTransactions(){
   let txs=[...state.transactions].sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.createdAt||0)-(a.createdAt||0));
-  if(txFilter!=='all') txs=txs.filter(t=>t.type===txFilter);
+  if(txFilter!=='all') txs=txs.filter(t=>!t.isAdjustment&&t.type===txFilter);
   if(txSearch.trim()) txs=txs.filter(t=>txMatchesQuery(t,txSearch));
   $('#main').innerHTML=`
     <div class="tx-search"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></svg><input id="txSearchInput" type="search" placeholder="Поиск: REWE, продукты, карта…" value="${esc(txSearch)}"></div>
@@ -1769,8 +1922,8 @@ function calendarMonthHTML(cursor=calendarCursor){
   for(let day=1;day<=days;day++){
     const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const pe=events.filter(x=>toISODate(x.date)===iso), at=txs.filter(t=>t.date===iso);
-    const income=pe.filter(x=>x.p.type==='income'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
-    const expense=pe.filter(x=>x.p.type==='expense'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+    const income=pe.filter(x=>x.p.type==='income'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>isAnalyticalTransaction(t)&&t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+    const expense=pe.filter(x=>x.p.type==='expense'&&!x.completed).reduce((s,x)=>s+Number(x.p.amount||0),0)+at.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
     const has=pe.length||at.length; const today=iso===todayISO();
     cells.push(`<button class="cal-day ${has?'has-events':''} ${today?'today':''}" data-calendar-day="${iso}"><span>${day}</span>${has?`<i>${income>0?'<b class="inc"></b>':''}${expense>0?'<b class="exp"></b>':''}</i><small>${expense>0?`−${compactMoney(expense)}`:income>0?`+${compactMoney(income)}`:''}</small>`:''}</button>`);
   }
@@ -1802,8 +1955,10 @@ function renderPlanCalendarBindings(){
 function renderPlan(){
   chartRegistry.clear();
   const nextMonth=addMonths(new Date(),1);
-  const recurringIncome=hasRecurringPlan('income')?recurringPlanMonthly('income',nextMonth):actualAverage('income');
-  const recurringExpense=hasRecurringPlan('expense')?recurringPlanMonthly('expense',nextMonth):actualAverage('expense');
+  const nextIncomeBase=forecastBaseForMonth('income',nextMonth);
+  const nextExpenseBase=forecastBaseForMonth('expense',nextMonth);
+  const recurringIncome=nextIncomeBase.amount;
+  const recurringExpense=nextExpenseBase.amount;
   const due=monthRemainingSummary();
   const timeline=primaryUpcomingPlans();
   const budgets=budgetSnapshot();
@@ -1812,7 +1967,7 @@ function renderPlan(){
       <div class="section-head"><h2>Прогноз капитала</h2><span class="badge" id="forecastRangeLabel">${planForecastRange} мес.</span></div>
       <div class="forecast-range-tabs">${[3,6,12,18].map(n=>`<button data-forecast-range="${n}" class="${planForecastRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
       <div id="forecastDynamic">${planForecastHTML()}</div>
-      <div class="forecast-method"><span>Доходы: <b>${hasRecurringPlan('income')?'по плану':'средний факт'}</b></span><span>Расходы: <b>${hasRecurringPlan('expense')?'по плану':'средний факт'}</b></span></div>
+      <div class="forecast-method"><span>Доходы: <b>${esc(nextIncomeBase.mode.toLowerCase())}</b></span><span>Расходы: <b>${esc(nextExpenseBase.mode.toLowerCase())}</b></span></div>
       <div class="chart-hint">Зажми линию и веди пальцем по месяцам. Маркеры показывают месяцы с запланированными событиями.</div>
     </section>
 
@@ -1855,7 +2010,7 @@ function renderPlan(){
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Бюджеты категорий</h2><button data-action="add-budget">Добавить</button></div>
+      <div class="section-head"><h2>Бюджеты категорий</h2><div class="section-actions"><button data-action="suggest-budgets">Подобрать</button><button data-action="add-budget">Добавить</button></div></div>
       ${budgets.length?`<div class="budget-overview-list">${budgets.map(budgetOverviewRow).join('')}</div>`:`<div class="empty-inline"><strong>Лимитов пока нет</strong><span>Например: продукты ≤ 350 € в месяц.</span></div>`}
     </section>
 
@@ -1897,9 +2052,11 @@ function renderStats(){
   const monthly=monthlySeries(statsRange);
   const capital=capitalMonthlySeries(statsRange);
   const comparison=monthComparison();
-  const savingsRate=m.income?m.net/m.income*100:0;
-  const avgExpense=actualAverage('expense');
-  const avgIncome=actualAverage('income');
+  const savingsRate=m.income?m.net/m.income*100:null;
+  const avgExpenseInfo=actualAverageInfo('expense');
+  const avgIncomeInfo=actualAverageInfo('income');
+  const avgExpense=avgExpenseInfo.monthly;
+  const avgIncome=avgIncomeInfo.monthly;
   const topCat=cats[0];
   const budgets=budgetSnapshot();
   const overBudgets=budgets.filter(b=>b.ratio>1);
@@ -1908,8 +2065,8 @@ function renderStats(){
     <div class="pill-tabs stats-period">${[3,6,9,12].map(n=>`<button data-range="${n}" class="${statsRange===n?'active':''}">${n} мес.</button>`).join('')}</div>
 
     <section class="stats-hero">
-      <div><small>Расходы месяца</small><strong>${fmtMajor(m.expense)}</strong><span>${comparison.expenseDelta===null?'нет сравнения':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}% к прошлому`}</span></div>
-      <div><small>Savings rate <button class="inline-info" data-explain="savings" aria-label="Как считается savings rate">${uiIcon('info')}</button></small><strong class="${savingsRate>=0?'positive':'negative'}">${Math.round(savingsRate)}%</strong><span>${fmtMajor(m.net,true)} за месяц</span></div>
+      <div><small>Расходы месяца</small><strong>${fmtMajor(m.expense)}</strong><span>${comparison.expenseDelta===null?'нет сравнения':`${comparison.expenseDelta>0?'+':''}${Math.round(comparison.expenseDelta)}% ${comparison.label}`}</span></div>
+      <div><small>Норма накопления <button class="inline-info" data-explain="savings" aria-label="Как считается savings rate">${uiIcon('info')}</button></small><strong class="${savingsRate===null?'':savingsRate>=0?'positive':'negative'}">${savingsRate===null?'—':`${Math.round(savingsRate)}%`}</strong><span>${fmtMajor(m.net,true)} за месяц</span></div>
     </section>
 
     <section class="section"><div class="section-head"><h2>Доходы и расходы</h2><span class="badge">cash flow</span></div><div class="chart-surface"><div class="chart">${svgBars(monthly)}</div><div class="chart-legend"><span><i class="legend-income"></i>Доходы</span><span><i class="legend-expense"></i>Расходы</span></div></div></section>
@@ -1918,9 +2075,9 @@ function renderStats(){
     <section class="section"><div class="section-head"><h2>Наблюдения</h2><span class="badge">локальный анализ</span></div><div class="insight-list">${financialInsights().map(x=>`<div class="insight-card ${x.tone}"><strong>${esc(x.title)}</strong><span>${esc(x.sub)}</span></div>`).join('')}</div></section>
 
     <section class="section"><div class="section-head"><h2>Показатели</h2></div><div class="insight-list list-surface">
-      <div class="insight-row"><span>Средний расход · 90 дней</span><strong>${fmtMajor(avgExpense)}</strong></div>
-      <div class="insight-row"><span>Средний доход · 90 дней</span><strong>${fmtMajor(avgIncome)}</strong></div>
-      <div class="insight-row"><span>Финансовый запас</span><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong></div>
+      <div class="insight-row"><span>Средний расход · ${avgExpenseInfo.denominatorDays||'—'} дн.</span><strong>${fmtMajor(avgExpense)}</strong></div>
+      <div class="insight-row"><span>Средний доход · ${avgIncomeInfo.denominatorDays||'—'} дн.</span><strong>${fmtMajor(avgIncome)}</strong></div>
+      <div class="insight-row"><span>Запас без новых доходов</span><strong>${runway===null?'—':`${runway.toFixed(1)} мес.`}</strong></div>
       <div class="insight-row"><span>Крупнейшая категория</span><strong>${topCat?`${esc(topCat.icon)} ${esc(topCat.name)} · ${fmtMajor(topCat.value)}`:'—'}</strong></div>
       <div class="insight-row"><span>Бюджеты с перерасходом</span><strong class="${overBudgets.length?'negative':'positive'}">${overBudgets.length}</strong></div>
     </div></section>
@@ -1955,21 +2112,40 @@ function openAppearanceSettings(){
 }
 function openAdvancedSettings(){
   openSheet(`<div class="sheet-head"><h3>Расширенные настройки</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
-    <div class="definition-list list-surface"><div class="definition-row"><strong>Свободные деньги</strong><span>Учитывают обязательные платежи ближайших 30 дней. Формулу можно открыть по значку ⓘ на обзоре.</span></div><div class="definition-row"><strong>Прогноз</strong><span>Если есть регулярный план соответствующего типа — используется он; иначе средний факт последних 90 дней.</span></div><div class="definition-row"><strong>Плановые операции</strong><span>Никогда не становятся фактическими автоматически. Проведение всегда подтверждается вручную.</span></div></div>
+    <div class="definition-list list-surface"><div class="definition-row"><strong>Свободные деньги</strong><span>Учитывают обязательные платежи ближайших 30 дней. Формулу можно открыть по значку ⓘ на обзоре.</span></div><div class="definition-row"><strong>Прогноз</strong><span>Доходы считаются осторожно: регулярный план, а если его нет — средний факт. Расходы не могут стать ниже обычного факта только из-за одного фиксированного плана: берётся максимум из регулярного плана и среднего факта.</span></div><div class="definition-row"><strong>Плановые операции</strong><span>Никогда не становятся фактическими автоматически. Проведение всегда подтверждается вручную.</span></div></div>
     <button class="secondary-btn" id="advancedIntegrity">Проверить целостность данных</button>`);
   $('#advancedIntegrity').onclick=()=>runIntegrityCheck();
 }
 function runIntegrityCheck(){
   const issues=[];
   const accountIds=new Set(state.accounts.map(a=>a.id)),catIds=new Set(state.categories.map(c=>c.id));
-  state.transactions.forEach(t=>{if(!(Number(t.amount)>0))issues.push('Операция с некорректной суммой');if(t.accountId&&!accountIds.has(t.accountId))issues.push('Операция с удалённым счётом');if(t.type!=='transfer'&&t.categoryId&&!catIds.has(t.categoryId))issues.push('Операция с удалённой категорией');if(t.type==='transfer'&&t.accountId===t.toAccountId)issues.push('Перевод на тот же счёт')});
-  state.plans.forEach(p=>{if(!(Number(p.amount)>0))issues.push('План с некорректной суммой');if(p.endDate&&p.date&&p.endDate<p.date)issues.push('План с окончанием раньше начала')});
-  showToast(issues.length?`Найдено проблем: ${new Set(issues).size}`:'Данные выглядят целостными');
+  state.transactions.forEach(t=>{
+    if(!['income','expense','transfer'].includes(t.type))issues.push('Операция с неизвестным типом');
+    if(!(Number(t.amount)>0))issues.push('Операция с некорректной суммой');
+    if(!t.accountId||!accountIds.has(t.accountId))issues.push('Операция с удалённым или отсутствующим счётом');
+    if(t.type!=='transfer'&&t.categoryId&&!catIds.has(t.categoryId))issues.push('Операция с удалённой категорией');
+    if(t.type==='transfer'){
+      if(!t.toAccountId||!accountIds.has(t.toAccountId))issues.push('Перевод без корректного счёта назначения');
+      if(t.accountId===t.toAccountId)issues.push('Перевод на тот же счёт');
+    }
+    if(t.date&&t.date>todayISO())issues.push('Фактическая операция датирована будущим');
+  });
+  state.plans.forEach(p=>{
+    if(!(Number(p.amount)>0))issues.push('План с некорректной суммой');
+    if(p.accountId&&!accountIds.has(p.accountId))issues.push('План с удалённым счётом');
+    if(p.categoryId&&!catIds.has(p.categoryId))issues.push('План с удалённой категорией');
+    if(p.endDate&&p.date&&p.endDate<p.date)issues.push('План с окончанием раньше начала');
+  });
+  state.budgets.forEach(b=>{if(!catIds.has(b.categoryId))issues.push('Бюджет с удалённой категорией');if(Number(b.limit)<0)issues.push('Бюджет с отрицательным лимитом')});
+  state.goals.forEach(g=>{if(Number(g.target)<0||Number(g.saved)<0)issues.push('Цель с отрицательной суммой')});
+  const unique=[...new Set(issues)];
+  showToast(unique.length?`Найдено проблем: ${unique.length}`:'Данные выглядят целостными');
 }
+
 function openMonthCloseSheet(){
-  const m=monthTotals(),cmp=monthComparison(),cats=expenseByCategory(),sr=m.income?m.net/m.income*100:0;
+  const m=monthTotals(),cmp=monthComparison(),cats=expenseByCategory(),sr=m.income?m.net/m.income*100:null;
   const title=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(new Date());
-  openSheet(`<div class="sheet-head"><h3>Итоги месяца</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="month-close"><div class="month-close-title">${esc(title)}</div><div class="month-close-grid"><div><small>Доходы</small><strong class="positive">${fmtMajor(m.income)}</strong></div><div><small>Расходы</small><strong>${fmtMajor(m.expense)}</strong></div><div><small>Результат</small><strong class="${m.net>=0?'positive':'negative'}">${fmtMajor(m.net,true)}</strong></div><div><small>Норма накопления</small><strong>${Math.round(sr)}%</strong></div></div>${cats[0]?`<p>Больше всего расходов: <b>${esc(cats[0].icon)} ${esc(cats[0].name)} · ${fmtMajor(cats[0].value)}</b>.</p>`:''}${cmp.expenseDelta!==null?`<p>Расходы ${cmp.expenseDelta>0?'выше':'ниже'} прошлого месяца на <b>${Math.abs(Math.round(cmp.expenseDelta))}%</b>.</p>`:''}</div><button class="primary-btn sheet-close">Готово</button>`);
+  openSheet(`<div class="sheet-head"><h3>Итоги месяца</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="month-close"><div class="month-close-title">${esc(title)}</div><div class="month-close-grid"><div><small>Доходы</small><strong class="positive">${fmtMajor(m.income)}</strong></div><div><small>Расходы</small><strong>${fmtMajor(m.expense)}</strong></div><div><small>Результат</small><strong class="${m.net>=0?'positive':'negative'}">${fmtMajor(m.net,true)}</strong></div><div><small>Норма накопления</small><strong>${sr===null?'—':`${Math.round(sr)}%`}</strong></div></div>${cats[0]?`<p>Больше всего расходов: <b>${esc(cats[0].icon)} ${esc(cats[0].name)} · ${fmtMajor(cats[0].value)}</b>.</p>`:''}${cmp.expenseDelta!==null?`<p>Расходы ${cmp.expenseDelta>0?'выше':'ниже'} ${cmp.label} на <b>${Math.abs(Math.round(cmp.expenseDelta))}%</b>.</p>`:''}</div><button class="primary-btn sheet-close">Готово</button>`);
 }
 
 
@@ -2096,7 +2272,7 @@ function renderMore(){
 
     <details class="tech-details section"><summary>Диагностика</summary><div class="diagnostics list-surface">
       <div><span>Версия приложения</span><strong>${APP_VERSION}</strong></div>
-      <div><span>Версия данных</span><strong>${state.version||8}</strong></div>
+      <div><span>Версия данных</span><strong>${state.version||9}</strong></div>
       <div><span>Операций</span><strong>${state.transactions.length}</strong></div>
       <div><span>Планов</span><strong>${state.plans.length}</strong></div>
       <div><span>Хранение</span><strong>IndexedDB · локально</strong></div>
@@ -2111,7 +2287,8 @@ async function completePlannedOccurrence(planId,dateISO){
   if(!p || isOccurrenceCompleted(planId,dateISO))return;
   const previous=structuredClone(state);
   const transactionId=uid();
-  state.transactions.push({id:transactionId,type:p.type,amount:Number(p.amount)||0,date:dateISO||todayISO(),accountId:p.accountId||state.accounts[0]?.id,toAccountId:null,categoryId:p.categoryId||null,note:`По плану: ${p.title||planCategory(p)?.name||'операция'}`,createdAt:Date.now()});
+  const actualDate=(dateISO&&dateISO<=todayISO())?dateISO:todayISO();
+  state.transactions.push({id:transactionId,type:p.type,amount:Number(p.amount)||0,date:actualDate,accountId:p.accountId||state.accounts[0]?.id,toAccountId:null,categoryId:p.categoryId||null,note:`По плану: ${p.title||planCategory(p)?.name||'операция'}`,createdAt:Date.now()});
   state.planCompletions.push({planId,date:dateISO,transactionId,completedAt:Date.now()});
   state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[p.type]:p.accountId||state.accounts[0]?.id};
   if(p.categoryId)state.settings.lastCategoryByType={...(state.settings.lastCategoryByType||{}),[p.type]:p.categoryId};
@@ -2137,6 +2314,7 @@ function bindCommonActions(){
   $$('[data-action="manage-accounts"]').forEach(b=>b.onclick=openAccountsManager);
   $$('[data-action="manage-categories"]').forEach(b=>b.onclick=openCategoriesManager);
   $$('[data-action="add-budget"]').forEach(b=>b.onclick=()=>openBudgetSheet());
+  $$('[data-action="suggest-budgets"]').forEach(b=>b.onclick=openBudgetSuggestions);
   $$('[data-action="add-goal"]').forEach(b=>b.onclick=()=>openGoalSheet());
   $$('[data-tab-link]').forEach(b=>b.onclick=()=>switchTab(b.dataset.tabLink));
   $$('[data-account]').forEach(b=>b.onclick=()=>openAccountDetail(account(b.dataset.account)));
@@ -2502,15 +2680,20 @@ function setFormError(form,msg=''){
 }
 function openTransactionSheet(existing=null,initialType='expense',template=null){
   if(!state.accounts.length){showToast('Сначала добавьте хотя бы один счёт');openAccountsManager();return}
-  let type=existing?.type||template?.type||initialType;
+  const requestedType=existing?.type||template?.type||initialType;
+  if(requestedType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');openAccountsManager();return}
+  let type=requestedType;
   const build=()=>{
     const recent=[...state.transactions].filter(x=>x.type===type).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
     const t=existing||template||{};
     const isTransfer=type==='transfer';
-    const defaultAccount=t.accountId||state.settings.lastAccountByType?.[type]||recent?.accountId||state.accounts[0]?.id;
-    const defaultCategory=t.categoryId||state.settings.lastCategoryByType?.[type]||recent?.categoryId||state.categories.find(c=>c.type===type)?.id;
-    const defaultTo=t.toAccountId||recent?.toAccountId||state.accounts.find(a=>a.id!==defaultAccount)?.id||state.accounts[0]?.id;
+    const accountCandidates=[t.accountId,state.settings.lastAccountByType?.[type],recent?.accountId,state.accounts[0]?.id];
+    const defaultAccount=accountCandidates.find(id=>id&&account(id))||state.accounts[0]?.id;
     const cats=state.categories.filter(c=>c.type===type);
+    const categoryCandidates=[t.categoryId,state.settings.lastCategoryByType?.[type],recent?.categoryId,cats[0]?.id];
+    const defaultCategory=categoryCandidates.find(id=>id&&category(id)?.type===type)||cats[0]?.id||'';
+    const toCandidates=[t.toAccountId,recent?.toAccountId,state.accounts.find(a=>a.id!==defaultAccount)?.id];
+    const defaultTo=toCandidates.find(id=>id&&id!==defaultAccount&&account(id))||'';
     const quickCats=[category(defaultCategory),...cats.filter(c=>c.id!==defaultCategory)].filter(Boolean).slice(0,6);
     const quickAccounts=[account(defaultAccount),...state.accounts.filter(a=>a.id!==defaultAccount)].filter(Boolean).slice(0,4);
     openSheet(`<div class="sheet-head quick-sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':type==='expense'?'Новый расход':type==='income'?'Новый доход':'Перевод'}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
@@ -2525,16 +2708,16 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
           <details class="advanced-details" ${existing?'open':''}><summary>Дата, комментарий и другие варианты</summary><div class="advanced-body">
             <div class="field"><label>Все категории</label><select id="categorySelectFull">${categoryOptions(type,defaultCategory)}</select></div>
             <div class="field"><label>Все счета</label><select id="accountSelectFull">${accountOptions(defaultAccount)}</select></div>
-            <div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div>
+            <div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(existing?t.date:todayISO())}"></div>
             <div class="field"><label>Получатель / магазин</label><input name="merchant" maxlength="60" placeholder="Например: REWE" value="${esc(t.merchant||'')}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Необязательно" value="${esc(t.note||'')}"></div>
           </div></details>`:`
           <div class="transfer-grid"><div class="field"><label>Откуда</label><select name="accountId">${accountOptions(defaultAccount)}</select></div><div class="transfer-arrow">${uiIcon('transfer')}</div><div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div></div>
-          <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" required value="${esc(existing?t.date:todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
+          <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(existing?t.date:todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
         <div class="form-error hidden" role="alert"></div>
         <button class="primary-btn quick-save" type="submit">${existing?'Сохранить':type==='expense'?'Добавить расход':type==='income'?'Добавить доход':'Перевести'}</button>
         ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить</button><button class="danger-btn" type="button" id="deleteTx">Удалить</button>':''}
       </form>`);
-    $$('[data-type]').forEach(b=>b.onclick=()=>{type=b.dataset.type;build()});
+    $$('[data-type]').forEach(b=>b.onclick=()=>{const nextType=b.dataset.type;if(nextType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');return}type=nextType;build()});
     $$('[data-quick-category]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickCategory;$('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#categorySelectFull');if(sel)sel.value=id});
     $$('[data-quick-account]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickAccount;$('#accountHidden').value=id;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#accountSelectFull');if(sel)sel.value=id});
     const catSel=$('#categorySelectFull');if(catSel)catSel.onchange=e=>{$('#categoryHidden').value=e.target.value;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===e.target.value))};
@@ -2543,8 +2726,13 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       e.preventDefault(); const form=e.currentTarget; const fd=new FormData(form); const amount=Number(fd.get('amount'));
       setFormError(form,'');
       if(!amount||amount<=0){setFormError(form,'Введите сумму больше нуля.');$('#txAmount')?.focus();return}
-      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),merchant:type==='transfer'?'':String(fd.get('merchant')||'').trim(),note:String(fd.get('note')||'').trim(),needsReview:false,createdAt:existing?.createdAt||Date.now()};
-      if(type==='transfer' && obj.accountId===obj.toAccountId){setFormError(form,'Для перевода выберите два разных счёта.');return}
+      const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),merchant:type==='transfer'?'':String(fd.get('merchant')||'').trim(),note:String(fd.get('note')||'').trim(),needsReview:false,isAdjustment:Boolean(existing?.isAdjustment),createdAt:existing?.createdAt||Date.now()};
+      if(obj.date>todayISO()){setFormError(form,'Фактическая операция не может быть датирована будущим. Для будущих платежей используйте План.');return}
+      if(!account(obj.accountId)){setFormError(form,'Выберите существующий счёт.');return}
+      if(type==='transfer'){
+        if(!obj.toAccountId||!account(obj.toAccountId)){setFormError(form,'Выберите счёт назначения.');return}
+        if(obj.accountId===obj.toAccountId){setFormError(form,'Для перевода выберите два разных счёта.');return}
+      }
       const previous=structuredClone(state);
       if(existing) state.transactions=state.transactions.map(x=>x.id===existing.id?obj:x); else state.transactions.push(obj);
       state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[type]:obj.accountId};
@@ -2562,12 +2750,13 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
   }; build();
 }
 
-function openPlanSheet(existing=null,initialDate=null){
+function openPlanSheet(existing=null,initialDate=null,template=null){
   if(!state.accounts.length){showToast('Сначала добавьте счёт');return}
-  let type=existing?.type||'expense';
+  let type=existing?.type||template?.type||'expense';
   const build=()=>{
-    const p=existing||{date:initialDate||todayISO()};
-    openSheet(`<div class="sheet-head"><h3>${existing?'Изменить план':'Новая плановая операция'}</h3><button class="sheet-close">×</button></div>
+    const p=existing||template||{date:initialDate||todayISO()};
+    if(!existing&&template&&initialDate)p.date=initialDate;
+    openSheet(`<div class="sheet-head"><h3>${existing?'Изменить план':template?'Создать план из операции':'Новая плановая операция'}</h3><button class="sheet-close">×</button></div>
       <div class="segmented" style="grid-template-columns:1fr 1fr"><button data-plan-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-plan-type="income" class="${type==='income'?'active':''}">Доход</button></div>
       <form id="planForm"><div class="form-grid">
         <div class="field full"><label>Название</label><input name="title" required placeholder="Например: аренда, зарплата или BAföG" value="${esc(p.title||'')}"></div>
@@ -2643,8 +2832,19 @@ function openCategoriesManager(){
 function openCategorySheet(existing=null){
   const c=existing||{};
   openSheet(`<div class="sheet-head"><h3>${existing?'Изменить категорию':'Новая категория'}</h3><button class="sheet-close">×</button></div><form id="catForm"><div class="form-grid"><div class="field"><label>Иконка</label><input name="icon" maxlength="4" value="${esc(c.icon||'📌')}"></div><div class="field"><label>Тип</label><select name="type"><option value="expense" ${c.type!=='income'?'selected':''}>Расход</option><option value="income" ${c.type==='income'?'selected':''}>Доход</option></select></div><div class="field full"><label>Название</label><input name="name" required maxlength="40" value="${esc(c.name||'')}"></div></div><button class="primary-btn" type="submit">Сохранить</button>${existing?'<button class="danger-btn" id="deleteCat" type="button">Удалить категорию</button>':''}</form>`);
-  $('#catForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),icon:String(fd.get('icon')||'📌').trim(),type:fd.get('type'),preset:existing?.preset||false};if(existing)state.categories=state.categories.map(x=>x.id===existing.id?obj:x);else state.categories.push(obj);await persist();closeSheet();render();showToast('Категория сохранена')};
+  $('#catForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const obj={id:existing?.id||uid(),name:String(fd.get('name')).trim(),icon:String(fd.get('icon')||'📌').trim(),type:fd.get('type'),preset:existing?.preset||false};if(existing&&obj.type!==existing.type){const used=state.transactions.some(t=>t.categoryId===existing.id)||state.plans.some(p=>p.categoryId===existing.id)||state.budgets.some(b=>b.categoryId===existing.id);if(used){showToast('Нельзя менять тип используемой категории · создайте новую');return}}if(existing)state.categories=state.categories.map(x=>x.id===existing.id?obj:x);else state.categories.push(obj);await persist();closeSheet();render();showToast('Категория сохранена')};
   const del=$('#deleteCat');if(del)del.onclick=async()=>{const used=state.transactions.some(t=>t.categoryId===existing.id)||state.plans.some(p=>p.categoryId===existing.id)||state.budgets.some(b=>b.categoryId===existing.id);if(used){showToast('Категория используется в данных');return}if(confirm('Удалить категорию?')){state.categories=state.categories.filter(x=>x.id!==existing.id);await persist();closeSheet();render()}};
+}
+
+function openBudgetSuggestions(){
+  const suggestions=budgetSuggestions(3);
+  openSheet(`<div class="sheet-head"><div><h3>Подобрать бюджеты</h3><p class="sheet-subtitle">На основе фактических расходов последних полных месяцев. Текущие лимиты не меняются.</p></div><button class="sheet-close">×</button></div>
+    ${suggestions.length?`<div class="budget-suggestion-list">${suggestions.map(x=>`<div class="budget-suggestion-row"><span>${esc(x.category?.icon||'•')}</span><div><strong>${esc(x.category?.name||'Категория')}</strong><small>Среднее ${x.months} мес.: ${fmtMajor(x.average)}</small></div><b>${fmtMajor(x.suggested)}</b></div>`).join('')}</div><div class="notice">Предложение — средний расход за доступные полные месяцы, округлённый вверх до 5 €. Это стартовый лимит, а не рекомендация тратить всю сумму.</div><button class="primary-btn" id="applyBudgetSuggestions">Создать ${suggestions.length} бюджет${suggestions.length===1?'':'ов'}</button>`:`<div class="empty-inline"><strong>Пока нечего предложить</strong><span>Нужно минимум два полных месяца расходов в категории без существующего бюджета.</span></div>`}`);
+  const apply=$('#applyBudgetSuggestions');if(apply)apply.onclick=async()=>{
+    const previous=structuredClone(state);
+    suggestions.forEach(x=>{if(!state.budgets.some(b=>b.categoryId===x.categoryId))state.budgets.push({id:uid(),categoryId:x.categoryId,limit:x.suggested})});
+    try{await persist();closeSheet();render({motion:'refresh'});showToast('Бюджеты созданы')}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить бюджеты')}
+  };
 }
 
 function openBudgetSheet(existing=null){
@@ -2676,7 +2876,7 @@ async function exportJSON(){
 }
 function exportCSV(){
   const rows=[['date','type','amount','category','account','to_account','comment']];
-  [...state.transactions].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(t=>rows.push([t.date,t.type,t.amount,category(t.categoryId)?.name||'',account(t.accountId)?.name||'',account(t.toAccountId)?.name||'',t.note||'']));
+  [...state.transactions].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(t=>rows.push([t.date,t.isAdjustment?'adjustment':t.type,t.amount,t.isAdjustment?'':(category(t.categoryId)?.name||''),account(t.accountId)?.name||'',account(t.toAccountId)?.name||'',t.note||'']));
   const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`money-operations-${todayISO()}.csv`);showToast('CSV создан');
 }
 async function clearAllData(){

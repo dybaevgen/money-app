@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '8.3.0';
+const APP_VERSION = '8.4.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -64,8 +64,8 @@ function accountGlyph(type){
 }
 
 const defaultState = () => ({
-  version: 9,
-  settings: { currency:'EUR', reserve:0, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
+  version: 10,
+  settings: { currency:'EUR', reserve:0, safetyHorizonDays:90, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
     { id:'acc-cash', name:'Наличные', type:'cash', openingBalance:0, icon:'💶', protected:false }
@@ -212,7 +212,7 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:9,
+    version:10,
     settings:{
       ...d.settings,
       ...(s.settings||{}),
@@ -698,7 +698,104 @@ function mandatoryImpactBetween(start,end){
     .filter(x=>x.p.type==='expense'&&x.p.required&&!account(x.p.accountId)?.protected)
     .reduce((sum,x)=>sum+Number(x.p.amount||0),0);
 }
-function freeBalance(){ return totalBalance()-reservedBalance()-mandatoryFreeImpact(30); }
+
+// V8.4: "Безопасно доступно" is a cash-flow safety calculation, not
+// "capital minus the next 30 days". We simulate the explicit plan over a
+// rolling horizon and ask how much could be spent today without the projected
+// spendable balance falling below the user's reserve at any point.
+function safetyHorizonDays(){
+  return Math.max(30,Math.min(365,Math.round(Number(state.settings.safetyHorizonDays)||90)));
+}
+function safeCashflowForecast(days=safetyHorizonDays()){
+  const horizon=Math.max(30,Math.min(365,Math.round(Number(days)||90)));
+  const today=new Date();today.setHours(0,0,0,0);
+  const end=new Date(today);end.setDate(end.getDate()+horizon);end.setHours(23,59,59,999);
+  const overdueStart=new Date(today);overdueStart.setDate(overdueStart.getDate()-31);
+
+  // Project every account separately so money held in a protected account does
+  // not become spendable merely because future income is planned there. If a
+  // protected account itself goes below zero, that deficit does reduce the
+  // spendable pool because another account would ultimately have to cover it.
+  const balances=new Map(state.accounts.map(a=>[a.id,Number(accountBalance(a.id))||0]));
+  let unassignedDelta=0;
+  const spendableBalance=()=>{
+    let total=unassignedDelta,protectedPositive=0;
+    state.accounts.forEach(a=>{
+      const bal=Number(balances.get(a.id))||0;
+      total+=bal;
+      if(a.protected&&bal>0)protectedPositive+=bal;
+    });
+    return total-protectedPositive;
+  };
+
+  const byDay=new Map();
+  planOccurrencesBetween(overdueStart,end).forEach(({p,date})=>{
+    const d=new Date(date);d.setHours(0,0,0,0);
+    const isPast=d<today;
+    // A missed past income is not money we can rely on today. A missed required
+    // expense is still an obligation and is treated as due immediately.
+    if(isPast && !(p.type==='expense'&&p.required))return;
+    if(p.type!=='income'&&p.type!=='expense')return;
+    const target=isPast?new Date(today):d;
+    // An income without a valid destination account is too uncertain to use in
+    // a safety calculation. An expense without an account is still counted.
+    const acc=account(p.accountId);
+    if(p.type==='income'&&!acc)return;
+    const key=toISODate(target);
+    const row=byDay.get(key)||{date:target,events:[],income:0,expense:0,requiredExpense:0};
+    const amount=Math.max(0,Number(p.amount)||0);
+    if(!amount)return;
+    row.events.push({p,amount,accountId:acc?.id||'',type:p.type});
+    if(p.type==='income')row.income+=amount;
+    else{
+      row.expense+=amount;
+      if(p.required)row.requiredExpense+=amount;
+    }
+    byDay.set(key,row);
+  });
+
+  const rows=[...byDay.values()].sort((a,b)=>a.date-b.date);
+  const reserve=explicitReserve();
+  const currentSpendable=spendableBalance();
+  let minSpendable=currentSpendable,lowestDate=new Date(today);
+  let plannedIncome=0,plannedExpense=0,requiredExpense=0;
+
+  rows.forEach(row=>{
+    row.events.forEach(event=>{
+      const amount=event.amount;
+      if(event.accountId&&balances.has(event.accountId)){
+        balances.set(event.accountId,(Number(balances.get(event.accountId))||0)+(event.type==='income'?amount:-amount));
+      }else if(event.type==='expense'){
+        unassignedDelta-=amount;
+      }
+    });
+    plannedIncome+=row.income;
+    plannedExpense+=row.expense;
+    requiredExpense+=row.requiredExpense;
+    row.balance=spendableBalance();
+    if(row.balance<minSpendable){minSpendable=row.balance;lowestDate=new Date(row.date)}
+  });
+
+  const available=Math.max(0,minSpendable-reserve);
+  const deficit=Math.max(0,reserve-minSpendable);
+  return {
+    days:horizon,
+    total:totalBalance(),
+    protected:protectedBalance(),
+    reserve,
+    currentSpendable,
+    available,
+    deficit,
+    minSpendable,
+    lowestDate,
+    endSpendable:spendableBalance(),
+    plannedIncome,
+    plannedExpense,
+    requiredExpense,
+    rows
+  };
+}
+function freeBalance(){ return safeCashflowForecast().available; }
 
 function expenseByCategory(key=monthKey()){
   const map={};
@@ -900,7 +997,8 @@ function attentionItems(){
   if(over.length)items.push({id:'budgets',level:'warn',icon:'chart',title:`Перерасход бюджетов: ${over.length}`,sub:`Самый большой — ${over[0].category?.name||'категория'}.`,action:'open-budgets'});
   const pace=budgetPaceSnapshot();
   if(!over.length&&pace&&pace.daysLeft>=5&&pace.paceRatio>1.25)items.push({id:'budget-pace',level:'info',icon:'chart',title:'Расходы идут быстрее бюджетного темпа',sub:`По лимитам потрачено ${fmtMajor(pace.totalSpent)} из ${fmtMajor(pace.totalLimit)}.`,action:'open-budgets'});
-  if(freeBalance()<0)items.push({id:'free',level:'danger',icon:'info',title:'Свободные деньги ниже нуля',sub:'Непроведённые обязательства и ближайшие платежи превышают доступный остаток.',action:'explain-free'});
+  const safety=safeCashflowForecast();
+  if(safety.deficit>0)items.push({id:'free',level:'danger',icon:'info',title:`По плану не хватает ${fmtMajor(safety.deficit)}`,sub:`К ${fmtDate(toISODate(safety.lowestDate))} доступный остаток опускается ниже финансовой подушки.`,action:'explain-free'});
   const health=monthlyCashflowHealth(forecastSeries(3).series);
   if(health.hasDeficit)items.push({id:'cashflow',level:'warn',icon:'chart',title:`Дефицит до ${fmtMajor(health.required)} / мес.`,sub:'В одном из ближайших месяцев расходы выше доходов.',action:'explain-cashflow'});
   const age=daysSince(lastTransactionDate());
@@ -918,13 +1016,13 @@ function attentionItems(){
   return items;
 }
 function explanationData(key){
-  const total=totalBalance(), reserved=reservedBalance(), mandatory=mandatoryFreeImpact(30), free=freeBalance();
+  const total=totalBalance(), reserved=reservedBalance(), safety=safeCashflowForecast(), free=safety.available;
   const m=monthTotals();const runway=financialRunway();
   const forecast=forecastSeries(3);const health=monthlyCashflowHealth(forecast.series);
   const map={
     capital:{title:'Общий капитал',lead:fmtMajor(total),body:`Это сумма остатков всех счетов и наличных. Переводы между своими счетами капитал не меняют.`},
-    free:{title:'Свободные деньги',lead:fmtMajor(free),body:`Расчёт: капитал ${fmtMajor(total)} − резерв ${fmtMajor(reserved)} − непроведённые обязательные платежи (просроченные до 31 дня и ближайшие 30 дней) ${fmtMajor(mandatory)}. Это консервативный ориентир, а не банковский лимит.`},
-    reserve:{title:'Зарезервировано',lead:fmtMajor(reserved),body:`Сюда входят защищённые счета (${fmtMajor(protectedBalance())}) и дополнительный резерв (${fmtMajor(explicitReserve())}). Эти деньги остаются частью капитала.`},
+    free:{title:'Безопасно доступно',lead:fmtMajor(free),body:`Приложение моделирует явные плановые доходы и расходы на ${safety.days} дней вперёд и находит самый низкий прогнозируемый доступный остаток (${fmtMajor(safety.minSpendable)}${safety.rows.length?` около ${fmtDate(toISODate(safety.lowestDate))}`:''}). Из него сохраняется финансовая подушка ${fmtMajor(safety.reserve)}. Защищённые счета не считаются деньгами для повседневных трат. Исторические средние доходы здесь специально не предполагаются. Незапланированные будущие покупки в расчёт не входят.`},
+    reserve:{title:'Зарезервировано',lead:fmtMajor(reserved),body:`Сюда входят защищённые счета (${fmtMajor(protectedBalance())}) и финансовая подушка (${fmtMajor(explicitReserve())}). Подушка задаёт минимальный остаток, ниже которого расчёт «Безопасно доступно» не разрешает опускать прогноз.`},
     month:{title:'По плану к концу месяца',lead:fmtMajor(monthRemainingSummary().projected),body:`Текущий капитал ${fmtMajor(total)} + оставшиеся плановые доходы ${fmtMajor(monthRemainingSummary().income)} − оставшиеся плановые расходы ${fmtMajor(monthRemainingSummary().expense)}. Незапланированные будущие покупки сюда не добавляются.`},
     savings:{title:'Норма накопления',lead:m.income?`${Math.round(m.net/m.income*100)}%`:'—',body:'Доля дохода текущего месяца, которая осталась после расходов. Формула: (доходы − расходы) ÷ доходы.'},
     runway:{title:'Запас без новых доходов',lead:runway===null?'—':`${runway.toFixed(1)} мес.`,body:'Сколько месяцев доступный капитал после резерва покрывает текущий расчётный уровень расходов, если новые доходы полностью прекратятся.'},
@@ -1622,9 +1720,8 @@ function renderOverview(){
   const m=monthTotals();
   const total=totalBalance();
   const reserved=reservedBalance();
-  const mandatory=mandatoryExpenses(30);
-  const mandatoryImpact=mandatoryFreeImpact(30);
-  const free=freeBalance();
+  const safety=safeCashflowForecast();
+  const free=safety.available;
   const monthPlan=monthRemainingSummary();
   const monthEnd=monthPlan.projected;
   const timeline=primaryUpcomingPlans().slice(0,Math.max(3,Math.min(8,Number(state.settings.upcomingCount)||5)));
@@ -1645,10 +1742,10 @@ function renderOverview(){
       <div class="capital-label">Общий капитал <button class="inline-info" data-explain="capital" aria-label="Как считается капитал">${uiIcon('info')}</button></div>
       <div class="capital-value">${fmtMajor(total)}</div>
       <div class="capital-meta">
-        <div><span>Свободно <button class="inline-info" data-explain="free" aria-label="Как считаются свободные деньги">${uiIcon('info')}</button></span><strong class="${free>=0?'positive':'negative'}">${fmtMajor(free)}</strong></div>
+        <div><span>Безопасно доступно <button class="inline-info" data-explain="free" aria-label="Как считается безопасно доступная сумма">${uiIcon('info')}</button></span><strong class="${safety.deficit>0?'negative':'positive'}">${fmtMajor(free)}</strong></div>
         <div><span>Зарезервировано <button class="inline-info" data-explain="reserve" aria-label="Как считается резерв">${uiIcon('info')}</button></span><strong>${fmtMajor(reserved)}</strong></div>
       </div>
-      <div class="capital-footnote">${mandatory>0?(mandatory!==mandatoryImpact?`Непроведённых обязательных платежей: ${fmtMajor(mandatory)}; из них ${fmtMajor(mandatoryImpact)} уменьшают свободные деньги.`:`Непроведённых обязательных платежей: ${fmtMajor(mandatory)}.`):'Просроченных и ближайших обязательных платежей нет.'}</div>
+      <div class="capital-footnote">${safety.deficit>0?`По плану к ${fmtDate(toISODate(safety.lowestDate))} не хватает ${fmtMajor(safety.deficit)} до заданной финансовой подушки.`:`Прогноз на ${safety.days} дн.: минимальный доступный остаток ${fmtMajor(safety.minSpendable)}${safety.rows.length?` · ${fmtDate(toISODate(safety.lowestDate))}`:''}.`}</div>
     </section>
 
     ${adaptive&&attention.length?`<button class="attention-card ${attention.some(x=>x.level==='danger')?'danger':''}" data-action="open-inbox"><span class="attention-icon">${uiIcon('info')}</span><div><small>Требует внимания</small><strong>${attention[0].title}</strong><span>${attention.length>1?`И ещё ${attention.length-1}`:attention[0].sub}</span></div><b>${attention.length}</b>${uiIcon('chevron')}</button>`:''}
@@ -2112,7 +2209,7 @@ function openAppearanceSettings(){
 }
 function openAdvancedSettings(){
   openSheet(`<div class="sheet-head"><h3>Расширенные настройки</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
-    <div class="definition-list list-surface"><div class="definition-row"><strong>Свободные деньги</strong><span>Учитывают обязательные платежи ближайших 30 дней. Формулу можно открыть по значку ⓘ на обзоре.</span></div><div class="definition-row"><strong>Прогноз</strong><span>Доходы считаются осторожно: регулярный план, а если его нет — средний факт. Расходы не могут стать ниже обычного факта только из-за одного фиксированного плана: берётся максимум из регулярного плана и среднего факта.</span></div><div class="definition-row"><strong>Плановые операции</strong><span>Никогда не становятся фактическими автоматически. Проведение всегда подтверждается вручную.</span></div></div>
+    <div class="definition-list list-surface"><div class="definition-row"><strong>Безопасно доступно</strong><span>Моделирует явный план на выбранный горизонт и показывает, сколько можно изъять сегодня, не опуская прогноз ниже финансовой подушки. Защищённые счета не считаются доступными.</span></div><div class="definition-row"><strong>Прогноз</strong><span>Месячный прогноз может использовать регулярный план и осторожный средний факт. Но «Безопасно доступно» использует только явные плановые доходы и расходы — исторический доход не считается гарантированным.</span></div><div class="definition-row"><strong>Плановые операции</strong><span>Никогда не становятся фактическими автоматически. Проведение всегда подтверждается вручную.</span></div></div>
     <button class="secondary-btn" id="advancedIntegrity">Проверить целостность данных</button>`);
   $('#advancedIntegrity').onclick=()=>runIntegrityCheck();
 }
@@ -2250,7 +2347,7 @@ function renderMore(){
     <section class="section first-section"><div class="section-head"><h2>Основные</h2></div>${rows([
       row('wallet','Счета и кошельки',`${state.accounts.length} счетов · ${protectedCount} защищённых`,'manage-accounts'),
       row('tag','Категории','Доходы и расходы','manage-categories'),
-      row('shield','Дополнительный резерв',`${fmtMajor(explicitReserve())} сверх защищённых счетов`,'reserve'),
+      row('shield','Финансовая подушка',`${fmtMajor(explicitReserve())} · горизонт ${safetyHorizonDays()} дн.`,'reserve'),
       row('info','Требует внимания',att.length?'Есть пункты для проверки':'Всё в порядке','open-inbox',att.length?String(att.length):'')
     ])}</section>
 
@@ -2267,7 +2364,7 @@ function renderMore(){
     ])}</section>
 
     <section class="section"><div class="section-head"><h2>Расширенные</h2></div>${rows([
-      row('info','Логика расчётов','Прогноз, свободные деньги и проверка данных','advanced-settings')
+      row('info','Логика расчётов','Прогноз, безопасная сумма и проверка данных','advanced-settings')
     ])}</section>
 
     <details class="tech-details section"><summary>Диагностика</summary><div class="diagnostics list-surface">
@@ -2862,8 +2959,9 @@ function openGoalSheet(existing=null){
 }
 
 function openReserveSheet(){
-  openSheet(`<div class="sheet-head"><h3>Дополнительный резерв</h3><button class="sheet-close">×</button></div><form id="reserveForm"><div class="field"><label>Сумма резерва</label><input name="reserve" type="number" step="0.01" min="0" inputmode="decimal" value="${esc(state.settings.reserve||0)}"></div><div class="notice">Эта сумма вычитается из «Свободно» дополнительно к счетам, помеченным как защищённые накопления. Реальный капитал не меняется.</div><button class="primary-btn" type="submit">Сохранить</button></form>`);
-  $('#reserveForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);state.settings.reserve=Number(fd.get('reserve')||0);await persist();closeSheet();render()};
+  const horizon=safetyHorizonDays();
+  openSheet(`<div class="sheet-head"><div><h3>Финансовая подушка</h3><p class="sheet-subtitle">Минимум, который приложение не считает доступным для трат.</p></div><button class="sheet-close">×</button></div><form id="reserveForm"><div class="field"><label>Минимальный остаток</label><input name="reserve" type="number" step="0.01" min="0" inputmode="decimal" value="${esc(state.settings.reserve||0)}"><small class="field-help">Например, сумма на непредвиденные расходы. Защищённые счета учитываются отдельно.</small></div><div class="field"><label>Горизонт безопасного расчёта</label><select name="horizon">${[60,90,120,180].map(v=>`<option value="${v}" ${horizon===v?'selected':''}>${v} дней</option>`).join('')}</select><small class="field-help">Чем длиннее горизонт, тем больше будущих повторяющихся платежей попадает в расчёт.</small></div><div class="notice">«Безопасно доступно» моделирует явные плановые доходы и расходы на выбранный период и оставляет этот минимум нетронутым в самой низкой точке прогноза.</div><button class="primary-btn" type="submit">Сохранить</button></form>`);
+  $('#reserveForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);state.settings.reserve=Math.max(0,Number(fd.get('reserve')||0));state.settings.safetyHorizonDays=Math.max(30,Math.min(365,Number(fd.get('horizon')||90)));await persist();closeSheet();render({motion:'refresh'})};
 }
 
 function downloadBlob(blob,name){

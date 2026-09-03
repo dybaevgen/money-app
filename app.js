@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '8.4.1';
+const APP_VERSION = '9.0.0';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -64,7 +64,7 @@ function accountGlyph(type){
 }
 
 const defaultState = () => ({
-  version: 10,
+  version: 11,
   settings: { currency:'EUR', reserve:0, safetyHorizonDays:90, privacy:false, lastAccountByType:{}, lastCategoryByType:{}, lastBackupAt:null, animationSpeed:'smooth', interfaceDensity:'standard', accent:'blue', dashboardMode:'standard', adaptiveHome:true, showCentsDashboard:false, showGestureHints:true, upcomingCount:5, advanced:false },
   accounts: [
     { id:'acc-main', name:'Основная карта', type:'card', openingBalance:0, icon:'💳', protected:false },
@@ -101,9 +101,13 @@ const defaultState = () => ({
   scenarios: [],
   workspace:'personal',
   business:{
-    settings:{name:'Бизнес',cardOpening:0,cashOpening:0},
-    sales:[],
+    settings:{name:'Бизнес',cardOpening:0,cashOpening:0,vatPeriod:'quarterly',taxationMode:'ist',defaultVatRate:19,ordersMigrated:false},
+    orders:[],
+    customerPayments:[],
     factoryPayments:[],
+    inputVat:[],
+    vatPayments:[],
+    vatCorrections:[],
     adjustments:[]
   }
 });
@@ -119,6 +123,8 @@ let calendarCursor = new Date(new Date().getFullYear(),new Date().getMonth(),1,1
 let toastTimer = null;
 let sheetCloseTimer = null;
 let sheetMotionCleanup = null;
+let dbPromise = null;
+let swReloading = false;
 const chartRegistry = new Map();
 let chartEntranceObserver = null;
 const UI_STORAGE_KEY = 'money-ui-v4';
@@ -173,15 +179,22 @@ function applyUISettings(){
 
 
 function openDB(){
-  return new Promise((resolve,reject)=>{
+  if(dbPromise) return dbPromise;
+  dbPromise=new Promise((resolve,reject)=>{
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db=req.result;
+      db.onversionchange=()=>{try{db.close()}catch(_){};dbPromise=null};
+      resolve(db);
+    };
+    req.onerror = () => {dbPromise=null;reject(req.error)};
+    req.onblocked = () => {dbPromise=null};
   });
+  return dbPromise;
 }
 
 async function dbGet(){
@@ -212,7 +225,7 @@ function normalizeState(s){
   const d = defaultState();
   if (!s || typeof s !== 'object') return d;
   return {
-    version:10,
+    version:11,
     settings:{
       ...d.settings,
       ...(s.settings||{}),
@@ -233,12 +246,34 @@ function normalizeState(s){
     goals:Array.isArray(s.goals)?s.goals.map(g=>({...g,targetDate:g.targetDate||''})):[],
     scenarios:Array.isArray(s.scenarios)?s.scenarios.map(x=>({...x,scenario:{extraIncome:0,extraExpense:0,oneTimeExpense:0,oneTimeMonth:3,...(x.scenario||{})}})):[],
     workspace:s.workspace==='business'?'business':'personal',
-    business:{
-      settings:{...d.business.settings,...(s.business?.settings||{})},
-      sales:Array.isArray(s.business?.sales)?s.business.sales:[],
-      factoryPayments:Array.isArray(s.business?.factoryPayments)?s.business.factoryPayments:[],
-      adjustments:Array.isArray(s.business?.adjustments)?s.business.adjustments:[]
-    }
+    business:(()=>{
+      const oldBusiness=s.business||{};
+      const oldSales=Array.isArray(oldBusiness.sales)?oldBusiness.sales:[];
+      let orders=Array.isArray(oldBusiness.orders)?oldBusiness.orders.map(x=>({...x})):[];
+      let customerPayments=Array.isArray(oldBusiness.customerPayments)?oldBusiness.customerPayments.map(x=>({...x})):[];
+      const settings={...d.business.settings,...(oldBusiness.settings||{})};
+      if(!settings.ordersMigrated && oldSales.length){
+        const knownOrders=new Set(orders.map(x=>x.id));
+        const knownPayments=new Set(customerPayments.map(x=>x.id));
+        for(const x of oldSales){
+          const orderId=`legacy-order-${x.id}`;
+          const paymentId=`legacy-payment-${x.id}`;
+          if(!knownOrders.has(orderId))orders.push({id:orderId,title:x.note||'Продажа',totalAmount:Math.max(0,Number(x.amount)||0),factoryCost:Math.max(0,Number(x.factoryCost)||0),taxable:false,vatRate:19,vatIncluded:true,deliveryDate:x.date||'',createdAt:x.createdAt||Date.now(),updatedAt:x.updatedAt||x.createdAt||Date.now(),legacy:true});
+          if(!knownPayments.has(paymentId))customerPayments.push({id:paymentId,orderId,amount:Math.max(0,Number(x.amount)||0),method:x.method==='cash'?'cash':'card',date:x.date||todayISO(),note:'Перенесено из старой продажи',createdAt:x.createdAt||Date.now(),legacy:true});
+        }
+        settings.ordersMigrated=true;
+      }
+      return {
+        settings,
+        orders,
+        customerPayments,
+        factoryPayments:Array.isArray(oldBusiness.factoryPayments)?oldBusiness.factoryPayments:[],
+        inputVat:Array.isArray(oldBusiness.inputVat)?oldBusiness.inputVat:[],
+        vatPayments:Array.isArray(oldBusiness.vatPayments)?oldBusiness.vatPayments:[],
+        vatCorrections:Array.isArray(oldBusiness.vatCorrections)?oldBusiness.vatCorrections:[],
+        adjustments:Array.isArray(oldBusiness.adjustments)?oldBusiness.adjustments:[]
+      };
+    })()
   };
 }
 
@@ -1524,10 +1559,22 @@ function bindSwipeRows(){
 }
 async function deleteTransactionWithUndo(tx){
   if(!tx) return;
+  const previous=structuredClone(state);
   const removed={...tx};
+  const removedCompletions=state.planCompletions.filter(x=>x.transactionId===tx.id);
   state.transactions=state.transactions.filter(x=>x.id!==tx.id);
-  await persist();render();
-  showToast('Операция удалена','Отменить',async()=>{state.transactions.push(removed);await persist();render();showToast('Удаление отменено')});
+  state.planCompletions=state.planCompletions.filter(x=>x.transactionId!==tx.id);
+  try{
+    await persist();
+    render();
+    showToast('Операция удалена','Отменить',async()=>{
+      state.transactions.push(removed);
+      state.planCompletions.push(...removedCompletions);
+      await persist();render();showToast('Удаление отменено');
+    });
+  }catch(_){
+    state=previous;render({motion:'none'});showToast('Не удалось удалить операцию');
+  }
 }
 
 function animateChartsOnView(root=$('#main')){
@@ -1615,54 +1662,188 @@ function updateNavGlider(){
 function currentWorkspace(){return state.workspace==='business'?'business':'personal'}
 function businessData(){
   if(!state.business)state.business=defaultState().business;
+  const d=defaultState().business;
+  state.business.settings={...d.settings,...(state.business.settings||{})};
+  for(const key of ['orders','customerPayments','factoryPayments','inputVat','vatPayments','vatCorrections','adjustments'])if(!Array.isArray(state.business[key]))state.business[key]=[];
   return state.business;
 }
-function businessMetrics(){
-  const b=businessData();
-  let card=Number(b.settings.cardOpening)||0,cash=Number(b.settings.cashOpening)||0,debt=0,revenue=0,cost=0;
-  for(const x of b.sales){const sale=Number(x.amount)||0, factory=Number(x.factoryCost)||0;revenue+=sale;cost+=factory;debt+=factory;if(x.method==='cash')cash+=sale;else card+=sale}
-  for(const x of b.factoryPayments){const a=Number(x.amount)||0;card-=a;debt-=a}
-  for(const x of b.adjustments){const a=Number(x.amount)||0;if(x.account==='cash')cash+=a;else card+=a}
-  debt=Math.max(0,debt);
-  const total=card+cash,free=total-debt,available=Math.max(0,Math.min(card,debt)),shortage=Math.max(0,debt-Math.max(0,card));
-  return {card,cash,debt,total,free,available,shortage,revenue,cost,gross:revenue-cost};
-}
 function businessMoney(n,signed=false){return fmtMajor(Number(n)||0,signed)}
+function businessOrder(id){return businessData().orders.find(x=>x.id===id)||null}
+function businessOrderPayments(orderId){return businessData().customerPayments.filter(x=>x.orderId===orderId)}
+function businessRate(order){const n=Number(order?.vatRate);return Number.isFinite(n)&&n>=0?n:Number(businessData().settings.defaultVatRate)||19}
+function businessGrossFromBasis(amount,order){
+  const a=Math.max(0,Number(amount)||0),r=businessRate(order);
+  if(!order?.taxable||order?.vatIncluded!==false||r<=0)return a;
+  return a*(1+r/100);
+}
+function businessVatFromGross(gross,rate){const g=Math.max(0,Number(gross)||0),r=Math.max(0,Number(rate)||0);return r>0?g*r/(100+r):0}
+function businessPaymentGross(payment,order=businessOrder(payment?.orderId)){return businessGrossFromBasis(payment?.amount,order)}
+function businessOrderGross(order){return businessGrossFromBasis(order?.totalAmount,order)}
+function businessOrderReceivedBasis(orderId,excludePaymentId=''){return businessOrderPayments(orderId).filter(x=>x.id!==excludePaymentId).reduce((s,x)=>s+Math.max(0,Number(x.amount)||0),0)}
+function businessOrderReceivedGross(orderId){const o=businessOrder(orderId);return businessOrderPayments(orderId).reduce((s,x)=>s+businessPaymentGross(x,o),0)}
+function businessOrderRemainingBasis(orderId){const o=businessOrder(orderId);return Math.max(0,(Number(o?.totalAmount)||0)-businessOrderReceivedBasis(orderId))}
+function businessPaidTotal(){return businessData().factoryPayments.reduce((s,x)=>s+Math.max(0,Number(x.amount)||0),0)}
+function businessCostTotal(excludeOrderId=''){return businessData().orders.filter(x=>x.id!==excludeOrderId).reduce((s,x)=>s+Math.max(0,Number(x.factoryCost)||0),0)}
+function businessPeriodMode(){return businessData().settings.vatPeriod==='monthly'?'monthly':'quarterly'}
+function businessTaxationMode(){return businessData().settings.taxationMode==='soll'?'soll':'ist'}
+function businessPeriodKey(dateISO,mode=businessPeriodMode()){
+  const d=parseISO(dateISO||todayISO()),y=d.getFullYear(),m=d.getMonth()+1;
+  return mode==='monthly'?`${y}-${String(m).padStart(2,'0')}`:`${y}-Q${Math.floor((m-1)/3)+1}`;
+}
+function businessPeriodBounds(key){
+  let y,mStart,mEnd;
+  if(/^[0-9]{4}-Q[1-4]$/.test(key)){y=Number(key.slice(0,4));const q=Number(key.slice(-1));mStart=(q-1)*3;mEnd=mStart+2}
+  else{const parts=String(key).split('-');y=Number(parts[0]);mStart=Math.max(0,(Number(parts[1])||1)-1);mEnd=mStart}
+  const start=new Date(y,mStart,1,12),end=new Date(y,mEnd+1,0,12),due=new Date(y,mEnd+1,10,12);
+  return {start,end,due,startISO:toISODate(start),endISO:toISODate(end),dueISO:toISODate(due)};
+}
+function businessPeriodLabel(key){
+  if(/Q[1-4]$/.test(key))return `${key.slice(-2)} ${key.slice(0,4)}`;
+  const b=businessPeriodBounds(key);return new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(b.start);
+}
+function businessPeriodDueText(key){const b=businessPeriodBounds(key),d=b.due;const weekend=d.getDay()===0||d.getDay()===6;return `${fmtDate(b.dueISO)}${weekend?' · базовая дата приходится на выходной':''}`}
+function businessClosedVatKeys(){return new Set(businessData().vatPayments.filter(x=>x.closed!==false).map(x=>x.periodKey))}
+function businessVatEvents(){
+  const b=businessData(),mode=businessTaxationMode(),events=[];
+  for(const order of b.orders){
+    if(!order.taxable||businessRate(order)<=0)continue;
+    const rate=businessRate(order),payments=businessOrderPayments(order.id).slice().sort((a,z)=>(a.date||'').localeCompare(z.date||''));
+    if(mode==='ist'){
+      for(const p of payments){const gross=businessPaymentGross(p,order);events.push({id:`pay-${p.id}`,orderId:order.id,paymentId:p.id,date:p.date,amount:businessVatFromGross(gross,rate),gross,kind:'payment'})}
+      continue;
+    }
+    const delivery=order.deliveryDate||'';
+    let advanceGross=0;
+    for(const p of payments){
+      if(!delivery||p.date<delivery){const gross=businessPaymentGross(p,order);advanceGross+=gross;events.push({id:`advance-${p.id}`,orderId:order.id,paymentId:p.id,date:p.date,amount:businessVatFromGross(gross,rate),gross,kind:'advance'})}
+    }
+    if(delivery){const totalGross=businessOrderGross(order),remainingGross=Math.max(0,totalGross-advanceGross);if(remainingGross>.0001)events.push({id:`delivery-${order.id}`,orderId:order.id,date:delivery,amount:businessVatFromGross(remainingGross,rate),gross:remainingGross,kind:'delivery'})}
+  }
+  return events.filter(x=>x.date).sort((a,z)=>a.date.localeCompare(z.date));
+}
+function businessVatPeriodMap(){
+  const b=businessData(),map=new Map(),closed=businessClosedVatKeys();
+  const ensure=key=>{if(!map.has(key))map.set(key,{key,label:businessPeriodLabel(key),taxableGross:0,outputVat:0,inputVat:0,correction:0,safeReserve:0,net:0,expected:0,closed:closed.has(key),payment:null});return map.get(key)};
+  for(const e of businessVatEvents()){if(e.date>todayISO())continue;const p=ensure(businessPeriodKey(e.date));p.taxableGross+=Math.max(0,Number(e.gross)||0);p.outputVat+=e.amount;p.safeReserve+=e.amount}
+  for(const x of b.inputVat){if(x.confirmed===false||(x.date||'')>todayISO())continue;ensure(businessPeriodKey(x.date)).inputVat+=Math.max(0,Number(x.amount)||0)}
+  for(const x of b.vatCorrections){if((x.date||'')>todayISO())continue;const p=ensure(x.periodKey||businessPeriodKey(x.date));p.correction+=Number(x.amount)||0;if(Number(x.amount)>0)p.safeReserve+=Number(x.amount)||0}
+  for(const x of b.vatPayments){const p=ensure(x.periodKey);p.closed=true;p.payment=x}
+  for(const p of map.values()){p.net=p.outputVat-p.inputVat+p.correction;p.expected=Math.max(0,p.net);if(p.closed)p.safeReserve=0}
+  return map;
+}
+function businessVatPeriods(){return [...businessVatPeriodMap().values()].sort((a,z)=>z.key.localeCompare(a.key))}
+function businessCurrentVatPeriod(){const key=businessPeriodKey(todayISO()),map=businessVatPeriodMap();return map.get(key)||{key,label:businessPeriodLabel(key),taxableGross:0,outputVat:0,inputVat:0,correction:0,safeReserve:0,net:0,expected:0,closed:false,payment:null}}
+function businessVatSafeReserve(){return businessVatPeriods().reduce((s,p)=>s+(p.closed?0:Math.max(0,p.safeReserve)),0)}
+function businessVatExpectedTotal(){return businessVatPeriods().reduce((s,p)=>s+(p.closed?0:Math.max(0,p.expected)),0)}
+function businessMetrics(){
+  const b=businessData();let card=Number(b.settings.cardOpening)||0,cash=Number(b.settings.cashOpening)||0,receivedGross=0,cardReceived=0,cashReceived=0;
+  for(const p of b.customerPayments){const o=businessOrder(p.orderId);if(!o)continue;const a=businessPaymentGross(p,o);receivedGross+=a;if(p.method==='cash'){cash+=a;cashReceived+=a}else{card+=a;cardReceived+=a}}
+  let paidFactory=0;for(const x of b.factoryPayments){const a=Math.max(0,Number(x.amount)||0);card-=a;paidFactory+=a}
+  let paidVat=0;for(const x of b.vatPayments){const a=Math.max(0,Number(x.amount)||0);card-=a;paidVat+=a}
+  for(const x of b.adjustments){const a=Number(x.amount)||0;if(x.account==='cash')cash+=a;else card+=a}
+  const orderValue=b.orders.reduce((s,o)=>s+businessOrderGross(o),0),factoryCost=b.orders.reduce((s,o)=>s+Math.max(0,Number(o.factoryCost)||0),0),factoryDebt=Math.max(0,factoryCost-paidFactory),factoryCredit=Math.max(0,paidFactory-factoryCost);
+  const vatReserve=businessVatSafeReserve(),vatExpected=businessVatExpectedTotal(),requiredCard=factoryDebt+vatReserve,freeCard=Math.max(0,card-requiredCard),cardShortage=Math.max(0,requiredCard-card),factoryAvailable=Math.max(0,Math.min(card,factoryDebt));
+  const outstanding=Math.max(0,orderValue-receivedGross);
+  return {card,cash,total:card+cash,receivedGross,cardReceived,cashReceived,orderValue,outstanding,factoryCost,paidFactory,factoryDebt,factoryCredit,vatReserve,vatExpected,paidVat,requiredCard,freeCard,cardShortage,factoryAvailable};
+}
+function businessOrderVatPeriods(orderId){return new Set(businessVatEvents().filter(e=>e.orderId===orderId).map(e=>businessPeriodKey(e.date)))}
+function businessOrderCandidateVatPeriods(order,payments=businessOrderPayments(order?.id||'')){
+  const keys=new Set();if(!order?.taxable||businessRate(order)<=0)return keys;
+  if(businessTaxationMode()==='ist'){for(const p of payments)if(p.date)keys.add(businessPeriodKey(p.date));return keys}
+  const delivery=order.deliveryDate||'';let advances=0;
+  for(const p of payments){if(!delivery||p.date<delivery){if(p.date)keys.add(businessPeriodKey(p.date));advances+=businessPaymentGross(p,order)}}
+  if(delivery&&businessOrderGross(order)-advances>.0001)keys.add(businessPeriodKey(delivery));
+  return keys;
+}
+function businessOrderTouchesClosedVat(orderId){const closed=businessClosedVatKeys();return [...businessOrderVatPeriods(orderId)].some(k=>closed.has(k))}
+function businessPaymentVatPeriods(payment,order=businessOrder(payment?.orderId)){
+  const keys=new Set();if(!payment||!order||!order.taxable)return keys;
+  if(businessTaxationMode()==='ist'){keys.add(businessPeriodKey(payment.date));return keys}
+  if(!order.deliveryDate||payment.date<order.deliveryDate)keys.add(businessPeriodKey(payment.date));
+  if(order.deliveryDate&&payment.date<order.deliveryDate)keys.add(businessPeriodKey(order.deliveryDate));
+  return keys;
+}
+function businessPaymentTouchesClosedVat(payment,order=businessOrder(payment?.orderId)){const closed=businessClosedVatKeys();return [...businessPaymentVatPeriods(payment,order)].some(k=>closed.has(k))}
 function updateWorkspaceChrome(){
   const business=currentWorkspace()==='business';
-  const labels=business?{overview:'Обзор',transactions:'Продажи',plan:'Завод',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'};
+  const labels=business?{overview:'Обзор',transactions:'Заказы',plan:'Обязательства',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'};
   $$('.nav-item').forEach(b=>{const t=b.dataset.tab;const sm=b.querySelector('small');if(sm&&labels[t])sm.textContent=labels[t]});
-  const fab=$('#fab');if(fab)fab.setAttribute('aria-label',business?'Добавить продажу':'Добавить операцию');
+  const fab=$('#fab');if(fab)fab.setAttribute('aria-label',business?'Добавить заказ':'Добавить операцию');
   const wb=$('#workspaceSwitch');if(wb){wb.querySelector('strong').textContent=business?'Бизнес':'Личное';wb.classList.toggle('business',business)}
 }
-async function switchWorkspace(next){
-  if(!['personal','business'].includes(next)||next===currentWorkspace())return;
-  closeSheet();rememberViewState();state.workspace=next;activeTab='overview';window.scrollTo(0,0);await persist();updateWorkspaceChrome();render({motion:'none'});animatePageChrome();requestAnimationFrame(()=>animateTabSwap(next==='business'?1:-1));
+async function switchWorkspace(next){if(!['personal','business'].includes(next)||next===currentWorkspace())return;closeSheet();rememberViewState();state.workspace=next;activeTab='overview';window.scrollTo(0,0);await persist();updateWorkspaceChrome();render({motion:'none'});animatePageChrome();requestAnimationFrame(()=>animateTabSwap(next==='business'?1:-1))}
+function openWorkspaceSheet(){const cur=currentWorkspace();openSheet(`<div class="sheet-head"><div><h3>Пространство</h3><p class="sheet-subtitle">Личные и бизнес-финансы хранятся отдельно.</p></div><button class="sheet-close">×</button></div><div class="workspace-list list-surface"><button data-workspace="personal" class="workspace-choice ${cur==='personal'?'selected':''}"><span class="workspace-symbol">⌂</span><span><strong>Личное</strong><small>Счета, операции, планы и бюджеты</small></span><b>${cur==='personal'?'✓':''}</b></button><button data-workspace="business" class="workspace-choice ${cur==='business'?'selected':''}"><span class="workspace-symbol">💼</span><span><strong>${esc(businessData().settings.name||'Бизнес')}</strong><small>Заказы, платежи, завод и НДС</small></span><b>${cur==='business'?'✓':''}</b></button></div>`);$$('[data-workspace]', $('#sheet')).forEach(b=>b.onclick=()=>switchWorkspace(b.dataset.workspace))}
+function businessOrderRow(o){
+  const received=businessOrderReceivedGross(o.id),total=businessOrderGross(o),remaining=Math.max(0,total-received),payments=businessOrderPayments(o.id).length;
+  return `<button class="tx-item business-sale-row" data-business-order="${o.id}"><div class="tx-icon">${remaining>.01?'📦':'✓'}</div><div class="tx-main"><strong>${esc(o.title||'Заказ')}</strong><small>${payments} плат. · получено ${businessMoney(received)}${o.taxable?` · НДС ${businessRate(o)}%`:' · без НДС'}</small></div><div class="tx-amount ${remaining>.01?'':'positive'}">${remaining>.01?businessMoney(remaining):businessMoney(total)}</div></button>`
 }
-function openWorkspaceSheet(){
-  const cur=currentWorkspace();
-  openSheet(`<div class="sheet-head"><div><h3>Пространство</h3><p class="sheet-subtitle">Личные и бизнес-финансы хранятся отдельно.</p></div><button class="sheet-close">×</button></div><div class="workspace-list list-surface"><button data-workspace="personal" class="workspace-choice ${cur==='personal'?'selected':''}"><span class="workspace-symbol">⌂</span><span><strong>Личное</strong><small>Счета, операции, планы и бюджеты</small></span><b>${cur==='personal'?'✓':''}</b></button><button data-workspace="business" class="workspace-choice ${cur==='business'?'selected':''}"><span class="workspace-symbol">💼</span><span><strong>${esc(businessData().settings.name||'Бизнес')}</strong><small>Продажи, наличные и расчёты с заводом</small></span><b>${cur==='business'?'✓':''}</b></button></div>`);
-  $$('[data-workspace]', $('#sheet')).forEach(b=>b.onclick=()=>switchWorkspace(b.dataset.workspace));
-}
-function businessSaleRow(x){return `<button class="tx-item business-sale-row" data-business-sale="${x.id}"><div class="tx-icon">${x.method==='cash'?'💶':'💳'}</div><div class="tx-main"><strong>${esc(x.note||'Продажа')}</strong><small>${fmtDate(x.date)} · ${x.method==='cash'?'наличные':'карта'} · заводу ${businessMoney(x.factoryCost)}</small></div><div class="tx-amount positive">+${businessMoney(x.amount)}</div></button>`}
+function businessVatPeriodRow(p){const due=businessPeriodDueText(p.key);return `<button class="list-button vat-period-row" data-vat-period="${p.key}"><span class="settings-icon">${p.closed?'✓':'%'}</span><div class="lb-main"><strong>${esc(p.label)}</strong><small>${p.closed?'Закрыт':`резерв ${businessMoney(p.safeReserve)} · к оплате ${businessMoney(p.expected)}`} · ${esc(due)}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`}
 function renderBusinessOverview(){
-  const m=businessMetrics(), b=businessData();
-  $('#main').innerHTML=`<section class="business-hero"><div class="business-kicker">${esc(b.settings.name||'Бизнес')} · свободные деньги</div><div class="business-free ${m.free<0?'negative':''}">${businessMoney(m.free)}</div><div class="business-balance-grid"><div><span>Карта</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные</span><strong>${businessMoney(m.cash)}</strong></div></div></section>
-  <section class="factory-status ${m.shortage>0?'warning':''}"><div class="section-head"><h2>Расчёт с заводом</h2><button data-business-pay>Оплатить</button></div><div class="factory-debt"><span>Нужно заплатить</span><strong>${businessMoney(m.debt)}</strong></div><div class="factory-status-grid"><div><span>Можно оплатить сейчас</span><b>${businessMoney(m.available)}</b></div><div><span>${m.shortage>0?'Не хватает на карте':'После оплаты на карте'}</span><b>${businessMoney(m.shortage>0?m.shortage:Math.max(0,m.card-m.debt))}</b></div></div>${m.shortage>0?`<p class="business-warning">Для полного расчёта с заводом на карте не хватает ${businessMoney(m.shortage)}.</p>`:''}</section>
-  <section class="section"><div class="section-head"><h2>Результат</h2></div><div class="business-metrics list-surface"><div><span>Выручка</span><strong>${businessMoney(m.revenue)}</strong></div><div><span>Закупочная стоимость</span><strong>${businessMoney(m.cost)}</strong></div><div><span>Валовая прибыль</span><strong>${businessMoney(m.gross)}</strong></div></div></section>
-  <section class="section"><div class="section-head"><h2>Последние продажи</h2><button data-business-all>Все</button></div>${b.sales.length?`<div class="tx-list list-surface">${[...b.sales].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0)).slice(0,5).map(businessSaleRow).join('')}</div>`:'<div class="empty-inline"><strong>Продаж пока нет</strong><span>Нажмите +, чтобы записать первую продажу.</span></div>'}</section>`;
-  $('[data-business-pay]')?.addEventListener('click',openFactoryPaymentSheet);$('[data-business-all]')?.addEventListener('click',()=>switchTab('transactions'));$$('[data-business-sale]').forEach(el=>el.onclick=()=>openBusinessSaleDetail(el.dataset.businessSale));
+  const m=businessMetrics(),b=businessData(),current=businessCurrentVatPeriod();
+  $('#main').innerHTML=`<section class="business-hero ${m.cardShortage>0?'business-hero-warning':''}"><div class="business-kicker">${esc(b.settings.name||'Бизнес')} · свободно на карте</div><div class="business-free">${businessMoney(m.freeCard)}</div><div class="business-balance-grid"><div><span>На карте</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные отдельно</span><strong>${businessMoney(m.cash)}</strong></div></div></section>
+  <section class="factory-status ${m.cardShortage>0?'warning':''}"><div class="section-head"><h2>Что нельзя трогать на карте</h2></div><div class="factory-debt"><span>Всего обязательно сохранить</span><strong>${businessMoney(m.requiredCard)}</strong></div><div class="business-obligation-grid"><div><span>Заводу</span><b>${businessMoney(m.factoryDebt)}</b></div><div><span>Резерв НДС</span><b>${businessMoney(m.vatReserve)}</b></div></div>${m.cardShortage>0?`<p class="business-warning">На карте не хватает ${businessMoney(m.cardShortage)} для покрытия завода и безопасного резерва НДС. Наличные в этот расчёт не входят.</p>`:`<p class="business-ok">После всех обязательств на карте действительно свободно ${businessMoney(m.freeCard)}.</p>`}</section>
+  <section class="section"><div class="section-head"><div><h2>НДС · ${esc(current.label)}</h2><p>${businessTaxationMode()==='ist'?'Istversteuerung':'Sollversteuerung'} · ${businessPeriodMode()==='monthly'?'ежемесячно':'поквартально'}</p></div><button data-business-vat>Открыть</button></div><div class="business-metrics list-surface"><div><span>Безопасный резерв</span><strong>${businessMoney(current.safeReserve)}</strong></div><div><span>Umsatzsteuer</span><strong>${businessMoney(current.outputVat)}</strong></div><div><span>Подтверждённая Vorsteuer</span><strong>${businessMoney(current.inputVat)}</strong></div><div><span>Ожидаемо Finanzamt</span><strong>${businessMoney(current.expected)}</strong></div></div></section>
+  <section class="section"><div class="section-head"><h2>Последние заказы</h2><button data-business-all>Все</button></div>${b.orders.length?`<div class="tx-list list-surface">${[...b.orders].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0)).slice(0,5).map(businessOrderRow).join('')}</div>`:'<div class="empty-inline"><strong>Заказов пока нет</strong><span>Нажмите + и создайте заказ. Платежи клиента можно добавлять частями.</span></div>'}</section>`;
+  $('[data-business-vat]')?.addEventListener('click',()=>switchTab('plan'));$('[data-business-all]')?.addEventListener('click',()=>switchTab('transactions'));$$('[data-business-order]').forEach(el=>el.onclick=()=>openBusinessOrderDetail(el.dataset.businessOrder));
 }
-function renderBusinessSales(){const b=businessData();const sales=[...b.sales].sort((a,z)=>(z.date||'').localeCompare(a.date||'')||((z.createdAt||0)-(a.createdAt||0)));$('#main').innerHTML=`<section class="section first-section"><div class="section-head"><div><h2>Продажи</h2><p>${sales.length} записей</p></div><button class="primary-mini" data-new-sale>+ Продажа</button></div>${sales.length?`<div class="tx-list list-surface">${sales.map(businessSaleRow).join('')}</div>`:'<div class="empty-state"><strong>Здесь появятся продажи</strong><span>Для каждой продажи укажите сумму, способ оплаты и сколько нужно отдать заводу.</span></div>'}</section>`;$('[data-new-sale]')?.addEventListener('click',()=>openBusinessSaleSheet());$$('[data-business-sale]').forEach(el=>el.onclick=()=>openBusinessSaleDetail(el.dataset.businessSale))}
-function renderBusinessFactory(){const b=businessData(),m=businessMetrics();const payments=[...b.factoryPayments].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0));$('#main').innerHTML=`<section class="factory-status ${m.shortage>0?'warning':''} first-section"><div class="section-head"><h2>Завод</h2><button data-business-pay>Оплатить</button></div><div class="factory-debt"><span>Текущий долг</span><strong>${businessMoney(m.debt)}</strong></div><div class="factory-status-grid"><div><span>На карте</span><b>${businessMoney(m.card)}</b></div><div><span>Доступно для оплаты</span><b>${businessMoney(m.available)}</b></div></div>${m.shortage>0?`<p class="business-warning">Не хватает ${businessMoney(m.shortage)} на карте.</p>`:''}</section><section class="section"><div class="section-head"><h2>Оплаты заводу</h2></div>${payments.length?`<div class="settings-list list-surface">${payments.map(x=>`<button class="list-button" data-factory-payment="${x.id}"><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>${businessMoney(x.amount)}</strong><small>${fmtDate(x.date)}${x.note?' · '+esc(x.note):''}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`).join('')}</div>`:'<div class="empty-inline"><strong>Оплат ещё нет</strong><span>После перевода денег заводу запишите оплату здесь.</span></div>'}</section>`;$('[data-business-pay]')?.addEventListener('click',openFactoryPaymentSheet);$$('[data-factory-payment]').forEach(el=>el.onclick=()=>openFactoryPaymentDetail(el.dataset.factoryPayment))}
-function renderBusinessStats(){const m=businessMetrics(),b=businessData();const cardSales=b.sales.filter(x=>x.method!=='cash').reduce((s,x)=>s+Number(x.amount||0),0),cashSales=b.sales.filter(x=>x.method==='cash').reduce((s,x)=>s+Number(x.amount||0),0);$('#main').innerHTML=`<section class="section first-section"><div class="section-head"><h2>Статистика бизнеса</h2></div><div class="business-stat-hero"><span>Валовая прибыль</span><strong>${businessMoney(m.gross)}</strong><small>Выручка минус закупочная стоимость проданного товара</small></div></section><section class="section"><div class="business-metrics list-surface"><div><span>Продажи на карту</span><strong>${businessMoney(cardSales)}</strong></div><div><span>Продажи наличными</span><strong>${businessMoney(cashSales)}</strong></div><div><span>Всего выручка</span><strong>${businessMoney(m.revenue)}</strong></div><div><span>Закупочная стоимость</span><strong>${businessMoney(m.cost)}</strong></div><div><span>Текущий долг заводу</span><strong>${businessMoney(m.debt)}</strong></div></div></section>`}
-function renderBusinessMore(){const b=businessData(),m=businessMetrics();$('#main').innerHTML=`<section class="app-version-card"><div class="app-version-main"><div class="app-version-icon">${uiIcon('sparkles')}</div><div><small>Money App · Business</small><strong>V${APP_VERSION}</strong><span>Отдельное бизнес-пространство</span></div></div></section><section class="section first-section"><div class="section-head"><h2>Бизнес</h2></div><div class="settings-list list-surface"><button class="list-button" data-business-settings><span class="settings-icon">${uiIcon('wallet')}</span><div class="lb-main"><strong>Настройки бизнеса</strong><small>${esc(b.settings.name||'Бизнес')} · стартовые остатки</small></div><span class="arrow">${uiIcon('chevron')}</span></button><button class="list-button" data-business-adjust><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>Корректировка остатка</strong><small>Если фактическая карта или наличные отличаются</small></div><span class="arrow">${uiIcon('chevron')}</span></button></div></section><section class="section"><div class="business-metrics list-surface"><div><span>Карта</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные</span><strong>${businessMoney(m.cash)}</strong></div><div><span>Долг заводу</span><strong>${businessMoney(m.debt)}</strong></div></div></section><section class="section"><button class="secondary-btn" data-switch-personal>Перейти в личные финансы</button></section>`;$('[data-business-settings]')?.addEventListener('click',openBusinessSettings);$('[data-business-adjust]')?.addEventListener('click',openBusinessAdjustmentSheet);$('[data-switch-personal]')?.addEventListener('click',()=>switchWorkspace('personal'))}
-function renderBusiness(){if(activeTab==='overview')renderBusinessOverview();if(activeTab==='transactions')renderBusinessSales();if(activeTab==='plan')renderBusinessFactory();if(activeTab==='stats')renderBusinessStats();if(activeTab==='more')renderBusinessMore()}
-function openBusinessSaleSheet(existing=null){const x=existing||{};openSheet(`<div class="sheet-head"><div><h3>${existing?'Продажа':'Новая продажа'}</h3><p class="sheet-subtitle">Закупочную стоимость укажите вручную.</p></div><button class="sheet-close">×</button></div><form id="businessSaleForm"><div class="field"><label>Сумма продажи</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${x.amount??''}" placeholder="0,00"></div><div class="segmented business-method"><label><input type="radio" name="method" value="card" ${x.method!=='cash'?'checked':''}><span>Карта</span></label><label><input type="radio" name="method" value="cash" ${x.method==='cash'?'checked':''}><span>Наличные</span></label></div><div class="field"><label>Нужно отдать заводу</label><input name="factoryCost" type="number" inputmode="decimal" min="0" step="0.01" required value="${x.factoryCost??''}" placeholder="0,00"><small>Эта сумма сразу увеличит долг заводу.</small></div><div class="field"><label>Дата</label><input name="date" type="date" required value="${x.date||todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" value="${esc(x.note||'')}" placeholder="Товар или заказ"></div><div class="form-error hidden"></div><button class="primary-btn">${existing?'Сохранить':'Добавить продажу'}</button></form>`);$('#businessSaleForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),factoryCost=Number(f.get('factoryCost'));if(!(amount>0)||factoryCost<0){setFormError(e.currentTarget,'Проверьте суммы');return}const item={id:x.id||uid(),amount,factoryCost,method:f.get('method')==='cash'?'cash':'card',date:String(f.get('date')||todayISO()),note:String(f.get('note')||'').trim(),createdAt:x.createdAt||Date.now(),updatedAt:Date.now()};const b=businessData();if(existing)b.sales=b.sales.map(v=>v.id===x.id?item:v);else b.sales.push(item);await persist();closeSheet();render({motion:'refresh'});showToast(existing?'Продажа обновлена':'Продажа добавлена')}}
-function openBusinessSaleDetail(id){const x=businessData().sales.find(v=>v.id===id);if(!x)return;openSheet(`<div class="sheet-head"><h3>${esc(x.note||'Продажа')}</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Получено</span><strong>${businessMoney(x.amount)}</strong></div><div><span>Способ</span><strong>${x.method==='cash'?'Наличные':'Карта'}</strong></div><div><span>Заводу</span><strong>${businessMoney(x.factoryCost)}</strong></div><div><span>Дата</span><strong>${esc(fmtDate(x.date))}</strong></div></div><button class="secondary-btn" data-edit-business-sale>Изменить</button><button class="danger-btn" data-delete-business-sale>Удалить продажу</button>`);$('[data-edit-business-sale]')?.addEventListener('click',()=>openBusinessSaleSheet(x));$('[data-delete-business-sale]')?.addEventListener('click',async()=>{if(!confirm('Удалить продажу? Балансы и долг заводу будут пересчитаны.'))return;businessData().sales=businessData().sales.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Продажа удалена')})}
-function openFactoryPaymentSheet(){const m=businessMetrics();openSheet(`<div class="sheet-head"><div><h3>Оплата заводу</h3><p class="sheet-subtitle">Оплата всегда списывается с бизнес-карты.</p></div><button class="sheet-close">×</button></div><div class="business-payment-hint"><span>Долг ${businessMoney(m.debt)}</span><span>На карте ${businessMoney(m.card)}</span></div><form id="factoryPaymentForm"><div class="field"><label>Сумма</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" max="${Math.max(0,m.debt)}" required value="${m.available>0?m.available:''}" placeholder="0,00"></div><div class="field"><label>Дата</label><input name="date" type="date" required value="${todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" placeholder="Например: перевод за неделю"></div><div class="form-error hidden"></div><button class="primary-btn" ${m.debt<=0?'disabled':''}>Записать оплату</button></form>`);$('#factoryPaymentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),now=businessMetrics();if(!(amount>0)){setFormError(e.currentTarget,'Введите сумму');return}if(amount>now.debt+.001){setFormError(e.currentTarget,'Сумма больше текущего долга заводу');return}if(amount>now.card+.001){setFormError(e.currentTarget,'На бизнес-карте недостаточно денег');return}businessData().factoryPayments.push({id:uid(),amount,date:String(f.get('date')||todayISO()),note:String(f.get('note')||'').trim(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Оплата заводу записана')}}
+function renderBusinessOrders(){
+  const b=businessData(),orders=[...b.orders].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0));
+  $('#main').innerHTML=`<section class="section first-section"><div class="section-head"><div><h2>Заказы</h2><p>${orders.length} · один заказ может иметь несколько платежей</p></div><button class="primary-mini" data-new-order>+ Заказ</button></div>${orders.length?`<div class="tx-list list-surface">${orders.map(businessOrderRow).join('')}</div>`:'<div class="empty-state"><strong>Здесь появятся заказы</strong><span>Создайте заказ, укажите стоимость завода и затем записывайте реальные платежи клиента.</span></div>'}</section>`;
+  $('[data-new-order]')?.addEventListener('click',()=>openBusinessOrderSheet());$$('[data-business-order]').forEach(el=>el.onclick=()=>openBusinessOrderDetail(el.dataset.businessOrder));
+}
+function renderBusinessObligations(){
+  const b=businessData(),m=businessMetrics(),periods=businessVatPeriods(),payments=[...b.factoryPayments].sort((a,z)=>(z.createdAt||0)-(a.createdAt||0));
+  $('#main').innerHTML=`<section class="factory-status ${m.cardShortage>0?'warning':''} first-section"><div class="section-head"><h2>Завод</h2><button data-business-pay>Оплатить</button></div><div class="factory-debt"><span>Текущий долг</span><strong>${businessMoney(m.factoryDebt)}</strong></div><div class="factory-status-grid"><div><span>На карте</span><b>${businessMoney(m.card)}</b></div><div><span>Оплатить сейчас</span><b>${businessMoney(m.factoryAvailable)}</b></div></div></section>
+  <section class="section"><div class="section-head"><div><h2>НДС</h2><p>Резерв не уменьшается от Vorsteuer до закрытия периода</p></div><button data-add-input-vat>+ Vorsteuer</button></div><div class="vat-summary-card ${m.cardShortage>0?'warning':''}"><div><span>Безопасный резерв НДС</span><strong>${businessMoney(m.vatReserve)}</strong></div><div><span>Ожидаемо к оплате</span><strong>${businessMoney(m.vatExpected)}</strong></div></div>${periods.length?`<div class="settings-list list-surface">${periods.map(businessVatPeriodRow).join('')}</div>`:'<div class="empty-inline"><strong>НДС пока не рассчитан</strong><span>Создайте налогооблагаемый заказ или внесите подтверждённую Vorsteuer.</span></div>'}</section>
+  <section class="section"><div class="section-head"><h2>Оплаты заводу</h2></div>${payments.length?`<div class="settings-list list-surface">${payments.map(x=>`<button class="list-button" data-factory-payment="${x.id}"><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>${businessMoney(x.amount)}</strong><small>${fmtDate(x.date)}${x.note?' · '+esc(x.note):''}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`).join('')}</div>`:'<div class="empty-inline"><strong>Оплат ещё нет</strong><span>После перевода денег заводу запишите оплату здесь.</span></div>'}</section>`;
+  $('[data-business-pay]')?.addEventListener('click',openFactoryPaymentSheet);$('[data-add-input-vat]')?.addEventListener('click',openInputVatSheet);$$('[data-vat-period]').forEach(el=>el.onclick=()=>openVatPeriodDetail(el.dataset.vatPeriod));$$('[data-factory-payment]').forEach(el=>el.onclick=()=>openFactoryPaymentDetail(el.dataset.factoryPayment));
+}
+function renderBusinessStats(){
+  const m=businessMetrics(),b=businessData(),taxable=b.orders.filter(o=>o.taxable).length;
+  $('#main').innerHTML=`<section class="section first-section"><div class="section-head"><h2>Статистика бизнеса</h2></div><div class="business-stat-hero"><span>Получено от клиентов</span><strong>${businessMoney(m.receivedGross)}</strong><small>Фактические Brutto-поступления по записанным платежам</small></div></section><section class="section"><div class="business-metrics list-surface"><div><span>На карту поступило</span><strong>${businessMoney(m.cardReceived)}</strong></div><div><span>Наличными поступило</span><strong>${businessMoney(m.cashReceived)}</strong></div><div><span>Стоимость заказов Brutto</span><strong>${businessMoney(m.orderValue)}</strong></div><div><span>Клиенты ещё должны</span><strong>${businessMoney(m.outstanding)}</strong></div><div><span>Закупочная стоимость завода</span><strong>${businessMoney(m.factoryCost)}</strong></div><div><span>Налогооблагаемых заказов</span><strong>${taxable}</strong></div><div><span>Резерв НДС</span><strong>${businessMoney(m.vatReserve)}</strong></div><div><span>Свободно на карте</span><strong>${businessMoney(m.freeCard)}</strong></div></div></section>`
+}
+function renderBusinessMore(){
+  const b=businessData(),m=businessMetrics();
+  $('#main').innerHTML=`<section class="app-version-card"><div class="app-version-main"><div class="app-version-icon">${uiIcon('sparkles')}</div><div><small>Money App · Business</small><strong>V${APP_VERSION}</strong><span>Заказы · завод · НДС</span></div></div></section><section class="section first-section"><div class="section-head"><h2>Бизнес</h2></div><div class="settings-list list-surface"><button class="list-button" data-business-settings><span class="settings-icon">${uiIcon('wallet')}</span><div class="lb-main"><strong>Настройки бизнеса и НДС</strong><small>${businessTaxationMode()==='ist'?'Ist':'Soll'} · ${businessPeriodMode()==='monthly'?'месяц':'квартал'} · ${businessRate({vatRate:b.settings.defaultVatRate})}%</small></div><span class="arrow">${uiIcon('chevron')}</span></button><button class="list-button" data-business-adjust><span class="settings-icon">${uiIcon('transfer')}</span><div class="lb-main"><strong>Корректировка остатка</strong><small>Сверка фактической карты или наличных</small></div><span class="arrow">${uiIcon('chevron')}</span></button></div></section><section class="section"><div class="business-metrics list-surface"><div><span>Карта</span><strong>${businessMoney(m.card)}</strong></div><div><span>Наличные</span><strong>${businessMoney(m.cash)}</strong></div><div><span>Заводу</span><strong>${businessMoney(m.factoryDebt)}</strong></div><div><span>Резерв НДС</span><strong>${businessMoney(m.vatReserve)}</strong></div><div><span>Свободно на карте</span><strong>${businessMoney(m.freeCard)}</strong></div></div></section><section class="section"><button class="secondary-btn" data-switch-personal>Перейти в личные финансы</button></section>`;
+  $('[data-business-settings]')?.addEventListener('click',openBusinessSettings);$('[data-business-adjust]')?.addEventListener('click',openBusinessAdjustmentSheet);$('[data-switch-personal]')?.addEventListener('click',()=>switchWorkspace('personal'));
+}
+function renderBusiness(){if(activeTab==='overview')renderBusinessOverview();if(activeTab==='transactions')renderBusinessOrders();if(activeTab==='plan')renderBusinessObligations();if(activeTab==='stats')renderBusinessStats();if(activeTab==='more')renderBusinessMore()}
+function openBusinessOrderSheet(existing=null){
+  const b=businessData(),x=existing||{},locked=existing&&businessOrderTouchesClosedVat(existing.id),defaultRate=Number(x.vatRate??b.settings.defaultVatRate??19),taxable=existing?Boolean(x.taxable):true,vatIncluded=existing?x.vatIncluded!==false:true;
+  if(locked){showToast('Этот заказ затрагивает закрытый период НДС · используйте корректировку');return}
+  const firstPayment=existing?'':Math.max(0,Number(x.firstPayment)||0);
+  openSheet(`<div class="sheet-head"><div><h3>${existing?'Заказ':'Новый заказ'}</h3><p class="sheet-subtitle">Заказ хранится отдельно от фактических платежей клиента.</p></div><button class="sheet-close">×</button></div><form id="businessOrderForm"><div class="field"><label>Название / клиент</label><input name="title" maxlength="80" required value="${esc(x.title||'')}" placeholder="Например: Сауна · Müller"></div><div class="field"><label>Стоимость заказа</label><input name="totalAmount" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${x.totalAmount??''}" placeholder="0,00"><small>Это ${vatIncluded?'Brutto':'Netto'}; фактический денежный поток считается по платежам.</small></div><div class="field"><label>Нужно отдать заводу</label><input name="factoryCost" type="number" inputmode="decimal" min="0" step="0.01" required value="${x.factoryCost??''}" placeholder="0,00"><small>Сумма увеличивает долг заводу независимо от способа оплаты клиента.</small></div><label class="toggle-row"><span><strong>Учитывать в НДС</strong><small>Способ оплаты выбирается отдельно</small></span><input type="checkbox" name="taxable" ${taxable?'checked':''}></label><div class="business-tax-fields"><div class="field"><label>Ставка НДС, %</label><input name="vatRate" type="number" inputmode="decimal" min="0" max="100" step="0.01" value="${defaultRate}"></div><label class="toggle-row compact"><span><strong>Цена включает НДС</strong><small>Brutto: НДС = сумма × ставка / (100 + ставка)</small></span><input type="checkbox" name="vatIncluded" ${vatIncluded?'checked':''}></label></div><div class="field"><label>Дата выполнения / поставки</label><input name="deliveryDate" type="date" value="${x.deliveryDate||''}"><small>Особенно важна при Sollversteuerung. Можно заполнить позже.</small></div>${existing?'':`<div class="form-divider"><span>Первый платёж клиента · необязательно</span></div><div class="field"><label>Сумма первого платежа</label><input name="firstPayment" type="number" inputmode="decimal" min="0" step="0.01" value="${firstPayment||''}" placeholder="0,00"><small>Если цена Netto, здесь тоже вводится Netto; на карту/наличные приложение зачислит Brutto.</small></div><div class="segmented business-method"><label><input type="radio" name="method" value="card" checked><span>Карта</span></label><label><input type="radio" name="method" value="cash"><span>Наличные</span></label></div><div class="field"><label>Дата платежа</label><input name="paymentDate" type="date" max="${todayISO()}" value="${todayISO()}"></div>`}<div class="form-error hidden"></div><button class="primary-btn">${existing?'Сохранить заказ':'Создать заказ'}</button></form>`);
+  $('#businessOrderForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),totalAmount=Number(f.get('totalAmount')),factoryCost=Number(f.get('factoryCost')),rate=Number(f.get('vatRate'));if(!(totalAmount>0)||factoryCost<0||rate<0||rate>100){setFormError(e.currentTarget,'Проверьте стоимость заказа, завода и ставку НДС');return}const deliveryDate=String(f.get('deliveryDate')||'');const currentPaid=existing?businessOrderReceivedBasis(x.id):0;if(existing&&totalAmount+0.001<currentPaid){setFormError(e.currentTarget,`Стоимость заказа не может быть меньше уже записанных платежей (${businessMoney(currentPaid)}).`);return}const futureCost=businessCostTotal(existing?x.id:'')+factoryCost;if(businessPaidTotal()>futureCost+.001){setFormError(e.currentTarget,'Нельзя уменьшить общий долг заводу ниже уже оплаченной суммы.');return}const item={id:x.id||uid(),title:String(f.get('title')||'').trim(),totalAmount,factoryCost,taxable:f.get('taxable')==='on',vatRate:Number.isFinite(rate)?rate:19,vatIncluded:f.get('vatIncluded')==='on',deliveryDate,createdAt:x.createdAt||Date.now(),updatedAt:Date.now()};const previewPayments=existing?businessOrderPayments(x.id):[];if([...businessOrderCandidateVatPeriods(item,previewPayments)].some(k=>businessClosedVatKeys().has(k))){setFormError(e.currentTarget,'Изменение затронет уже закрытый период НДС. Используйте корректировку.');return}if(existing){b.orders=b.orders.map(v=>v.id===x.id?item:v)}else{b.orders.push(item);const first=Number(f.get('firstPayment'))||0;if(first>0){if(first>totalAmount+.001){b.orders=b.orders.filter(v=>v.id!==item.id);setFormError(e.currentTarget,'Первый платёж больше стоимости заказа');return}const date=String(f.get('paymentDate')||todayISO());if(date>todayISO()){b.orders=b.orders.filter(v=>v.id!==item.id);setFormError(e.currentTarget,'Фактический платёж не может быть в будущем');return}const firstItem={id:uid(),orderId:item.id,amount:first,method:f.get('method')==='cash'?'cash':'card',date,note:'Первый платёж',createdAt:Date.now()};if([...businessOrderCandidateVatPeriods(item,[firstItem])].some(k=>businessClosedVatKeys().has(k))){b.orders=b.orders.filter(v=>v.id!==item.id);setFormError(e.currentTarget,'Первый платёж или дата исполнения затрагивают закрытый период НДС. Используйте корректировку.');return}b.customerPayments.push(firstItem)}}await persist();closeSheet();render({motion:'refresh'});showToast(existing?'Заказ обновлён':'Заказ создан')}
+}
+function openBusinessOrderDetail(id){
+  const o=businessOrder(id);if(!o)return;const payments=businessOrderPayments(id).sort((a,z)=>(z.date||'').localeCompare(a.date||'')),received=businessOrderReceivedGross(id),total=businessOrderGross(o),remaining=Math.max(0,total-received),vatPeriods=[...businessOrderVatPeriods(id)].map(businessPeriodLabel);
+  openSheet(`<div class="sheet-head"><div><h3>${esc(o.title||'Заказ')}</h3><p class="sheet-subtitle">${o.taxable?`НДС ${businessRate(o)}% · ${o.vatIncluded!==false?'Brutto':'Netto'}`:'Не учитывать в НДС'}</p></div><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Стоимость заказа Brutto</span><strong>${businessMoney(total)}</strong></div><div><span>Получено</span><strong>${businessMoney(received)}</strong></div><div><span>Осталось получить</span><strong>${businessMoney(remaining)}</strong></div><div><span>Заводу</span><strong>${businessMoney(o.factoryCost)}</strong></div>${o.deliveryDate?`<div><span>Выполнение</span><strong>${fmtDate(o.deliveryDate)}</strong></div>`:''}${vatPeriods.length?`<div><span>Периоды НДС</span><strong>${esc(vatPeriods.join(', '))}</strong></div>`:''}</div><div class="section-mini-title">Платежи клиента</div>${payments.length?`<div class="settings-list list-surface">${payments.map(p=>`<button class="list-button" data-customer-payment="${p.id}"><span class="settings-icon">${p.method==='cash'?'💶':'💳'}</span><div class="lb-main"><strong>${businessMoney(businessPaymentGross(p,o))}</strong><small>${fmtDate(p.date)} · ${p.method==='cash'?'наличные':'карта'}${p.note?' · '+esc(p.note):''}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`).join('')}</div>`:'<div class="empty-inline"><strong>Платежей пока нет</strong><span>Баланс карты или наличных изменится только после записи платежа.</span></div>'}<button class="primary-btn" data-add-customer-payment ${businessOrderRemainingBasis(id)<=.001?'disabled':''}>+ Добавить платёж</button><button class="secondary-btn" data-edit-business-order>Изменить заказ</button><button class="danger-btn" data-delete-business-order>Удалить заказ</button>`);
+  $('[data-add-customer-payment]')?.addEventListener('click',()=>openCustomerPaymentSheet(id));$('[data-edit-business-order]')?.addEventListener('click',()=>openBusinessOrderSheet(o));$$('[data-customer-payment]').forEach(el=>el.onclick=()=>openCustomerPaymentDetail(el.dataset.customerPayment));$('[data-delete-business-order]')?.addEventListener('click',async()=>{if(businessOrderTouchesClosedVat(id)){showToast('Нельзя удалить заказ из закрытого периода НДС · используйте корректировку');return}if(businessPaidTotal()>businessCostTotal(id)+.001){showToast('Сначала исправьте оплаты заводу · иначе возникнет переплата');return}if(!confirm('Удалить заказ и все его платежи?'))return;const b=businessData();b.orders=b.orders.filter(v=>v.id!==id);b.customerPayments=b.customerPayments.filter(v=>v.orderId!==id);await persist();closeSheet();render();showToast('Заказ удалён')})
+}
+function openCustomerPaymentSheet(orderId,existing=null){
+  const b=businessData(),o=businessOrder(orderId);if(!o)return;const x=existing||{},remaining=businessOrderRemainingBasis(orderId)+(existing?Math.max(0,Number(existing.amount)||0):0);if(existing&&businessPaymentTouchesClosedVat(existing,o)){showToast('Этот платёж влияет на закрытый период НДС · используйте корректировку');return}
+  openSheet(`<div class="sheet-head"><div><h3>${existing?'Платёж клиента':'Новый платёж'}</h3><p class="sheet-subtitle">${esc(o.title||'Заказ')} · осталось ${businessMoney(businessGrossFromBasis(remaining,o))}</p></div><button class="sheet-close">×</button></div><form id="customerPaymentForm"><div class="field"><label>${o.taxable&&o.vatIncluded===false?'Сумма Netto':'Сумма платежа'}</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" max="${remaining}" required value="${x.amount??''}" placeholder="0,00"></div><div class="segmented business-method"><label><input type="radio" name="method" value="card" ${x.method!=='cash'?'checked':''}><span>Карта</span></label><label><input type="radio" name="method" value="cash" ${x.method==='cash'?'checked':''}><span>Наличные</span></label></div><div class="field"><label>Дата получения</label><input name="date" type="date" max="${todayISO()}" required value="${x.date||todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" value="${esc(x.note||'')}" placeholder="Предоплата / остаток"></div><div class="form-error hidden"></div><button class="primary-btn">${existing?'Сохранить':'Добавить платёж'}</button></form>`);
+  $('#customerPaymentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),date=String(f.get('date')||todayISO());if(!(amount>0)||amount>remaining+.001){setFormError(e.currentTarget,'Платёж должен быть больше нуля и не превышать остаток заказа');return}if(date>todayISO()){setFormError(e.currentTarget,'Фактический платёж не может быть в будущем');return}const candidate={id:x.id||uid(),orderId,amount,method:f.get('method')==='cash'?'cash':'card',date,note:String(f.get('note')||'').trim(),createdAt:x.createdAt||Date.now(),updatedAt:Date.now()};if([...businessPaymentVatPeriods(candidate,o)].some(k=>businessClosedVatKeys().has(k))){setFormError(e.currentTarget,'Этот платёж изменит закрытый период НДС. Используйте корректировку.');return}if(existing)b.customerPayments=b.customerPayments.map(v=>v.id===x.id?candidate:v);else b.customerPayments.push(candidate);await persist();closeSheet();render({motion:'refresh'});showToast(existing?'Платёж обновлён':'Платёж добавлен')}
+}
+function openCustomerPaymentDetail(id){const b=businessData(),p=b.customerPayments.find(x=>x.id===id),o=p?businessOrder(p.orderId):null;if(!p||!o)return;const vat=o.taxable?businessVatFromGross(businessPaymentGross(p,o),businessRate(o)):0;openSheet(`<div class="sheet-head"><h3>Платёж клиента</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Заказ</span><strong>${esc(o.title||'Заказ')}</strong></div><div><span>Получено Brutto</span><strong>${businessMoney(businessPaymentGross(p,o))}</strong></div>${o.taxable?`<div><span>НДС в платеже</span><strong>${businessMoney(vat)}</strong></div>`:''}<div><span>Способ</span><strong>${p.method==='cash'?'Наличные':'Карта'}</strong></div><div><span>Дата</span><strong>${fmtDate(p.date)}</strong></div></div><button class="secondary-btn" data-edit-customer-payment>Изменить</button><button class="danger-btn" data-delete-customer-payment>Удалить платёж</button>`);$('[data-edit-customer-payment]')?.addEventListener('click',()=>openCustomerPaymentSheet(o.id,p));$('[data-delete-customer-payment]')?.addEventListener('click',async()=>{if(businessPaymentTouchesClosedVat(p,o)){showToast('Нельзя удалить платёж из закрытого периода НДС · используйте корректировку');return}if(!confirm('Удалить этот платёж клиента?'))return;b.customerPayments=b.customerPayments.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Платёж удалён')})}
+function openFactoryPaymentSheet(){const m=businessMetrics();openSheet(`<div class="sheet-head"><div><h3>Оплата заводу</h3><p class="sheet-subtitle">Оплата всегда списывается только с бизнес-карты.</p></div><button class="sheet-close">×</button></div><div class="business-payment-hint"><span>Долг ${businessMoney(m.factoryDebt)}</span><span>На карте ${businessMoney(m.card)}</span></div><form id="factoryPaymentForm"><div class="field"><label>Сумма</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" max="${Math.max(0,m.factoryDebt)}" required value="${m.factoryAvailable>0?m.factoryAvailable:''}" placeholder="0,00"></div><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="80" placeholder="Например: перевод заводу"></div><div class="form-error hidden"></div><button class="primary-btn" ${m.factoryDebt<=0?'disabled':''}>Записать оплату</button></form>`);$('#factoryPaymentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),now=businessMetrics();if(!(amount>0)){setFormError(e.currentTarget,'Введите сумму');return}const date=String(f.get('date')||todayISO());if(date>todayISO()){setFormError(e.currentTarget,'Фактическая оплата не может быть в будущем');return}if(amount>now.factoryDebt+.001){setFormError(e.currentTarget,'Сумма больше текущего долга заводу');return}if(amount>now.card+.001){setFormError(e.currentTarget,'На бизнес-карте недостаточно денег');return}businessData().factoryPayments.push({id:uid(),amount,date,note:String(f.get('note')||'').trim(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Оплата заводу записана')}}
 function openFactoryPaymentDetail(id){const x=businessData().factoryPayments.find(v=>v.id===id);if(!x)return;openSheet(`<div class="sheet-head"><h3>Оплата заводу</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Сумма</span><strong>${businessMoney(x.amount)}</strong></div><div><span>Дата</span><strong>${esc(fmtDate(x.date))}</strong></div>${x.note?`<div><span>Комментарий</span><strong>${esc(x.note)}</strong></div>`:''}</div><button class="danger-btn" data-delete-factory-payment>Удалить оплату</button>`);$('[data-delete-factory-payment]')?.addEventListener('click',async()=>{if(!confirm('Удалить эту оплату? Долг заводу будет восстановлен.'))return;businessData().factoryPayments=businessData().factoryPayments.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Оплата удалена')})}
-function openBusinessSettings(){const b=businessData();openSheet(`<div class="sheet-head"><h3>Настройки бизнеса</h3><button class="sheet-close">×</button></div><form id="businessSettingsForm"><div class="field"><label>Название</label><input name="name" maxlength="40" value="${esc(b.settings.name||'Бизнес')}"></div><div class="field"><label>Стартовый остаток карты</label><input name="cardOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cardOpening)||0}"><small>Остаток до первой записанной в приложении продажи.</small></div><div class="field"><label>Стартовые наличные</label><input name="cashOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cashOpening)||0}"></div><button class="primary-btn">Сохранить</button></form>`);$('#businessSettingsForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);b.settings.name=String(f.get('name')||'Бизнес').trim()||'Бизнес';b.settings.cardOpening=Number(f.get('cardOpening'))||0;b.settings.cashOpening=Number(f.get('cashOpening'))||0;await persist();closeSheet();updateWorkspaceChrome();render();showToast('Настройки сохранены')}}
+function openInputVatSheet(){
+  const b=businessData();openSheet(`<div class="sheet-head"><div><h3>Подтверждённая Vorsteuer</h3><p class="sheet-subtitle">Вводите именно сумму Vorsteuer из корректного счёта/Beleg.</p></div><button class="sheet-close">×</button></div><form id="inputVatForm"><div class="field"><label>Сумма Vorsteuer</label><input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="0,00"></div><div class="field"><label>Дата для периода НДС</label><input name="date" type="date" max="${todayISO()}" required value="${todayISO()}"></div><div class="field"><label>Счёт / комментарий</label><input name="note" maxlength="100" required placeholder="Например: Rechnung 2026-104"></div><label class="toggle-row"><span><strong>Rechnung / Beleg проверен</strong><small>Без подтверждения запись не уменьшает ожидаемый платёж</small></span><input type="checkbox" name="confirmed" required></label><div class="form-error hidden"></div><button class="primary-btn">Добавить Vorsteuer</button></form>`);$('#inputVatForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),date=String(f.get('date')||todayISO()),key=businessPeriodKey(date);if(!(amount>0)){setFormError(e.currentTarget,'Введите сумму Vorsteuer');return}if(businessClosedVatKeys().has(key)){setFormError(e.currentTarget,'Этот период уже закрыт. Используйте корректировку НДС.');return}if(f.get('confirmed')!=='on'){setFormError(e.currentTarget,'Подтвердите, что Rechnung / Beleg проверен');return}b.inputVat.push({id:uid(),amount,date,note:String(f.get('note')||'').trim(),confirmed:true,createdAt:Date.now()});await persist();closeSheet();render();showToast('Vorsteuer добавлена')}}
+function openInputVatDetail(id){const b=businessData(),x=b.inputVat.find(v=>v.id===id);if(!x)return;const key=businessPeriodKey(x.date),closed=businessClosedVatKeys().has(key);openSheet(`<div class="sheet-head"><h3>Vorsteuer</h3><button class="sheet-close">×</button></div><div class="business-detail list-surface"><div><span>Сумма</span><strong>${businessMoney(x.amount)}</strong></div><div><span>Период</span><strong>${esc(businessPeriodLabel(key))}</strong></div><div><span>Дата</span><strong>${fmtDate(x.date)}</strong></div><div><span>Rechnung</span><strong>${esc(x.note||'—')}</strong></div></div>${closed?'<div class="notice">Период закрыт. Историческая Vorsteuer заблокирована.</div>':'<button class="danger-btn" data-delete-input-vat>Удалить Vorsteuer</button>'}`);$('[data-delete-input-vat]')?.addEventListener('click',async()=>{if(!confirm('Удалить запись Vorsteuer?'))return;b.inputVat=b.inputVat.filter(v=>v.id!==id);await persist();closeSheet();render();showToast('Vorsteuer удалена')})}
+function openVatPeriodDetail(key){
+  const b=businessData(),p=businessVatPeriodMap().get(key)||{key,label:businessPeriodLabel(key),taxableGross:0,outputVat:0,inputVat:0,correction:0,safeReserve:0,net:0,expected:0,closed:false,payment:null},bounds=businessPeriodBounds(key),inputs=b.inputVat.filter(x=>businessPeriodKey(x.date)===key),corr=b.vatCorrections.filter(x=>x.periodKey===key||x.sourcePeriodKey===key),ended=todayISO()>=bounds.endISO;
+  openSheet(`<div class="sheet-head"><div><h3>НДС · ${esc(p.label)}</h3><p class="sheet-subtitle">Базовый срок: ${esc(businessPeriodDueText(key))}</p></div><button class="sheet-close">×</button></div><div class="vat-period-hero ${p.closed?'closed':''}"><span>${p.closed?'Период закрыт':'Ожидаемо к оплате Finanzamt'}</span><strong>${businessMoney(p.closed?(p.payment?.amount||0):p.expected)}</strong><small>${p.closed?`Оплачено ${fmtDate(p.payment?.date||'')}`:`Безопасный резерв ${businessMoney(p.safeReserve)}`}</small></div><div class="business-detail list-surface"><div><span>${businessTaxationMode()==='ist'?'Официальные поступления Brutto':'Налоговые события Brutto'}</span><strong>${businessMoney(p.taxableGross)}</strong></div><div><span>Umsatzsteuer</span><strong>${businessMoney(p.outputVat)}</strong></div><div><span>Подтверждённая Vorsteuer</span><strong>${businessMoney(p.inputVat)}</strong></div><div><span>Корректировки</span><strong>${businessMoney(p.correction,true)}</strong></div><div><span>Расчётный итог</span><strong>${businessMoney(p.net)}</strong></div></div>${inputs.length?`<div class="section-mini-title">Vorsteuer</div><div class="settings-list list-surface">${inputs.map(x=>`<button class="list-button" data-input-vat="${x.id}"><span class="settings-icon">🧾</span><div class="lb-main"><strong>${businessMoney(x.amount)}</strong><small>${fmtDate(x.date)} · ${esc(x.note||'')}</small></div><span class="arrow">${uiIcon('chevron')}</span></button>`).join('')}</div>`:''}${corr.length?`<div class="section-mini-title">Корректировки</div><div class="settings-list list-surface">${corr.map(x=>`<div class="list-button static"><span class="settings-icon">±</span><div class="lb-main"><strong>${businessMoney(x.amount,true)}</strong><small>${fmtDate(x.date)} · ${esc(x.note||'Корректировка')}</small></div></div>`).join('')}</div>`:''}${p.closed?'<button class="secondary-btn" data-vat-correction>+ Корректировка после закрытия</button>':`<button class="primary-btn" data-close-vat ${ended?'':'disabled'}>${p.expected>0?'НДС оплачен':'Закрыть период'}</button>${!ended?'<div class="notice">Период ещё не закончился, поэтому его нельзя закрыть.</div>':''}`}<div class="notice subtle">Money App ведёт управленческий резерв. Период, ставка и налоговый режим должны соответствовать вашим данным Finanzamt.</div>`);
+  $$('[data-input-vat]').forEach(el=>el.onclick=()=>openInputVatDetail(el.dataset.inputVat));$('[data-close-vat]')?.addEventListener('click',()=>openVatPaymentSheet(key));$('[data-vat-correction]')?.addEventListener('click',()=>openVatCorrectionSheet(key));
+}
+function openVatPaymentSheet(key){
+  const p=businessVatPeriodMap().get(key);if(!p||p.closed){showToast('Период уже закрыт');return}const bounds=businessPeriodBounds(key);if(todayISO()<bounds.endISO){showToast('Период ещё не закончился');return}const m=businessMetrics();
+  openSheet(`<div class="sheet-head"><div><h3>${p.expected>0?'НДС оплачен':'Закрыть период'}</h3><p class="sheet-subtitle">${esc(p.label)} · списание только с карты</p></div><button class="sheet-close">×</button></div><form id="vatPaymentForm"><div class="business-payment-hint"><span>Ожидается ${businessMoney(p.expected)}</span><span>На карте ${businessMoney(m.card)}</span></div><div class="field"><label>Фактически оплачено Finanzamt</label><input name="amount" type="number" inputmode="decimal" min="0" step="0.01" required value="${Number(p.expected.toFixed(2))}"></div><div class="field"><label>Дата оплаты / закрытия</label><input name="date" type="date" max="${todayISO()}" required value="${todayISO()}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Voranmeldung / платёж"></div><div class="form-error hidden"></div><button class="primary-btn">Закрыть ${esc(p.label)}</button></form>`);$('#vatPaymentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount')),date=String(f.get('date')||todayISO()),now=businessMetrics();if(amount<0||!Number.isFinite(amount)){setFormError(e.currentTarget,'Проверьте сумму');return}if(amount>now.card+.001){setFormError(e.currentTarget,'На бизнес-карте недостаточно денег для этой оплаты');return}if(Math.abs(amount-p.expected)>.011){setFormError(e.currentTarget,`Фактическая оплата должна совпадать с расчётом ${businessMoney(p.expected)}. Если Finanzamt требует другую сумму, сначала внесите корректировку НДС.`);return}businessData().vatPayments.push({id:uid(),periodKey:key,amount,date,note:String(f.get('note')||'').trim(),expectedAtClose:p.expected,outputVatAtClose:p.outputVat,inputVatAtClose:p.inputVat,closed:true,createdAt:Date.now()});await persist();closeSheet();render();showToast('Период НДС закрыт')}}
+function openVatCorrectionSheet(sourceKey){
+  const b=businessData(),targetKey=businessPeriodKey(todayISO());openSheet(`<div class="sheet-head"><div><h3>Корректировка НДС</h3><p class="sheet-subtitle">История ${esc(businessPeriodLabel(sourceKey))} не переписывается. Корректировка попадёт в текущий открытый период.</p></div><button class="sheet-close">×</button></div><form id="vatCorrectionForm"><div class="field"><label>Изменение НДС</label><input name="amount" type="number" inputmode="decimal" step="0.01" required placeholder="Например: 120 или -50"><small>Плюс увеличивает обязательство, минус уменьшает расчётный итог.</small></div><div class="field"><label>Причина</label><input name="note" maxlength="120" required placeholder="Причина корректировки"></div><div class="form-error hidden"></div><button class="primary-btn">Записать корректировку</button></form>`);$('#vatCorrectionForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount'));if(!amount||!Number.isFinite(amount)){setFormError(e.currentTarget,'Введите ненулевую сумму');return}if(businessClosedVatKeys().has(targetKey)){setFormError(e.currentTarget,'Текущий период уже закрыт. Сначала проверьте настройки периода НДС.');return}b.vatCorrections.push({id:uid(),sourcePeriodKey:sourceKey,periodKey:targetKey,amount,date:todayISO(),note:String(f.get('note')||'').trim(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Корректировка записана')}}
+function openBusinessSettings(){
+  const b=businessData(),lockedTaxConfig=b.vatPayments.length>0||b.inputVat.length>0||b.vatCorrections.length>0||businessVatEvents().some(e=>e.date<=todayISO());
+  openSheet(`<div class="sheet-head"><div><h3>Настройки бизнеса</h3><p class="sheet-subtitle">Налоговый режим задавайте только по данным вашего Finanzamt / Steuerberater.</p></div><button class="sheet-close">×</button></div><form id="businessSettingsForm"><div class="field"><label>Название</label><input name="name" maxlength="40" value="${esc(b.settings.name||'Бизнес')}"></div><div class="field"><label>Стартовый остаток карты</label><input name="cardOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cardOpening)||0}"></div><div class="field"><label>Стартовые наличные</label><input name="cashOpening" type="number" inputmode="decimal" step="0.01" value="${Number(b.settings.cashOpening)||0}"></div><div class="form-divider"><span>НДС</span></div><div class="field"><label>Налоговый режим</label><select name="taxationMode" ${lockedTaxConfig?'disabled':''}><option value="ist" ${businessTaxationMode()==='ist'?'selected':''}>Istversteuerung</option><option value="soll" ${businessTaxationMode()==='soll'?'selected':''}>Sollversteuerung</option></select><small>${lockedTaxConfig?'Заблокировано после появления налоговых данных.':'Ist: по поступлениям. Soll: по исполнению с учётом предоплат.'}</small></div><div class="field"><label>Период Voranmeldung</label><select name="vatPeriod" ${lockedTaxConfig?'disabled':''}><option value="quarterly" ${businessPeriodMode()==='quarterly'?'selected':''}>Квартал</option><option value="monthly" ${businessPeriodMode()==='monthly'?'selected':''}>Месяц</option></select></div><div class="field"><label>Ставка по умолчанию, %</label><input name="defaultVatRate" type="number" inputmode="decimal" min="0" max="100" step="0.01" value="${Number(b.settings.defaultVatRate)||19}"></div><div class="notice subtle">Старые продажи из V8 автоматически перенесены как заказы без НДС, чтобы приложение не создало налоговый долг задним числом без вашего подтверждения.</div><button class="primary-btn">Сохранить</button></form>`);$('#businessSettingsForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),rate=Number(f.get('defaultVatRate'));if(rate<0||rate>100){setFormError(e.currentTarget,'Проверьте ставку НДС');return}b.settings.name=String(f.get('name')||'Бизнес').trim()||'Бизнес';b.settings.cardOpening=Number(f.get('cardOpening'))||0;b.settings.cashOpening=Number(f.get('cashOpening'))||0;b.settings.defaultVatRate=rate;if(!lockedTaxConfig){b.settings.taxationMode=f.get('taxationMode')==='soll'?'soll':'ist';b.settings.vatPeriod=f.get('vatPeriod')==='monthly'?'monthly':'quarterly'}await persist();closeSheet();updateWorkspaceChrome();render();showToast('Настройки сохранены')}}
 function openBusinessAdjustmentSheet(){openSheet(`<div class="sheet-head"><div><h3>Корректировка остатка</h3><p class="sheet-subtitle">Используйте только для сверки с фактическими деньгами.</p></div><button class="sheet-close">×</button></div><form id="businessAdjustmentForm"><div class="field"><label>Счёт</label><select name="account"><option value="card">Карта</option><option value="cash">Наличные</option></select></div><div class="field"><label>Изменение</label><input name="amount" type="number" inputmode="decimal" step="0.01" required placeholder="Например: -20 или 50"></div><div class="field"><label>Причина</label><input name="note" maxlength="80" required placeholder="Сверка остатка"></div><button class="primary-btn">Применить</button></form>`);$('#businessAdjustmentForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),amount=Number(f.get('amount'));if(!amount)return;businessData().adjustments.push({id:uid(),account:f.get('account')==='cash'?'cash':'card',amount,note:String(f.get('note')||'').trim(),date:todayISO(),createdAt:Date.now()});await persist();closeSheet();render();showToast('Остаток скорректирован')}}
 
 function render({motion='refresh',direction=0}={}){
@@ -1672,7 +1853,7 @@ function render({motion='refresh',direction=0}={}){
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab));
   updateNavGlider();
   const business=currentWorkspace()==='business';
-  const title=(business?{overview:'Обзор',transactions:'Продажи',plan:'Завод',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'})[activeTab]; setPageTitle(title); if(motion!=='none')animatePageChrome();
+  const title=(business?{overview:'Обзор',transactions:'Заказы',plan:'Обязательства',stats:'Статистика',more:'Ещё'}:{overview:'Обзор',transactions:'Операции',plan:'План',stats:'Статистика',more:'Ещё'})[activeTab]; setPageTitle(title); if(motion!=='none')animatePageChrome();
   if(business){renderBusiness();requestAnimationFrame(()=>{enhanceRenderedUI();if(motion!=='none')animateMainSurface(motion,direction)});return}
   if(activeTab==='overview') renderOverview();
   if(activeTab==='transactions') renderTransactions();
@@ -1842,11 +2023,33 @@ function openTransactionDetail(t){
     <div class="detail-hero"><small>${t.isAdjustment?'Корректировка':t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
     <div class="detail-list">${t.type==='transfer'?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`:`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>`}${t.merchant?`<div><span>Получатель</span><strong>${esc(t.merchant)}</strong></div>`:''}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}</div>
     <div class="detail-actions ${!t.isAdjustment&&t.type!=='transfer'?'three':''}">${t.isAdjustment?'':`<button class="secondary-btn" id="detailRepeat">Повторить</button>`}${!t.isAdjustment&&t.type!=='transfer'?'<button class="secondary-btn" id="detailToPlan">В план</button>':''}<button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
-  $('#detailEdit').onclick=()=>openTransactionSheet(t,t.type);
+  $('#detailEdit').onclick=()=>t.isAdjustment?openAdjustmentTransactionSheet(t):openTransactionSheet(t,t.type);
   const repeat=$('#detailRepeat');if(repeat)repeat.onclick=()=>openTransactionSheet(null,t.type,t);
   const toPlan=$('#detailToPlan');if(toPlan)toPlan.onclick=()=>{const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);openPlanSheet(null,toISODate(tomorrow),{type:t.type,title:t.merchant||c?.name||'',amount:t.amount,categoryId:t.categoryId,accountId:t.accountId,frequency:'once',required:false})};
   $('#detailDelete').onclick=()=>{closeSheet();deleteTransactionWithUndo(t)};
 }
+function openAdjustmentTransactionSheet(t){
+  if(!t?.isAdjustment)return openTransactionSheet(t,t?.type||'expense');
+  const delta=t.type==='income'?Number(t.amount||0):-Number(t.amount||0);
+  const a=account(t.accountId);
+  openSheet(`<div class="sheet-head"><div><h3>Изменить корректировку</h3><p class="sheet-subtitle">Корректировка влияет на баланс, но не входит в статистику доходов и расходов.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div>
+    <form id="adjustmentTxForm"><div class="field"><label>Счёт</label><input value="${esc(a?.name||'Счёт недоступен')}" disabled></div><div class="field"><label>Изменение баланса</label><input name="delta" type="number" inputmode="decimal" step="0.01" required value="${esc(delta)}"><small>Плюс увеличивает остаток, минус уменьшает.</small></div><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'Корректировка после сверки баланса')}"></div><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">Сохранить</button></form>`);
+  $('#adjustmentTxForm').onsubmit=async e=>{
+    e.preventDefault();const form=e.currentTarget,fd=new FormData(form);setFormError(form,'');
+    const value=Number(fd.get('delta')),date=String(fd.get('date')||todayISO());
+    if(!Number.isFinite(value)||Math.abs(value)<.005){setFormError(form,'Введите ненулевую корректировку.');return}
+    if(date>todayISO()){setFormError(form,'Фактическая корректировка не может быть в будущем.');return}
+    if(!account(t.accountId)){setFormError(form,'Счёт этой корректировки больше не существует. Проверьте целостность данных.');return}
+    const type=value>0?'income':'expense';
+    const fallbackCategory=type==='income'?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id);
+    if(!fallbackCategory){setFormError(form,'Нет подходящей категории для корректировки.');return}
+    const previous=structuredClone(state);
+    const updated={...t,type,amount:Math.abs(value),date,categoryId:fallbackCategory,toAccountId:null,merchant:'',note:String(fd.get('note')||'').trim()||'Корректировка после сверки баланса',isAdjustment:true};
+    state.transactions=state.transactions.map(x=>x.id===t.id?updated:x);
+    try{await persist();closeSheet();render({motion:'refresh'});showToast('Корректировка обновлена')}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить корректировку')}
+  };
+}
+
 function openAccountDetail(a){
   if(!a)return;
   const bal=accountBalance(a.id);const txs=state.transactions.filter(t=>t.accountId===a.id||t.toAccountId===a.id);
@@ -1890,7 +2093,7 @@ function openQuickCapture(){
     closeSheet();render({motion:'refresh'});showToast('Записано · уточнить можно позже');
     persist().catch(()=>{state=prev;render({motion:'none'});showToast('Не удалось сохранить')});
   };
-  setTimeout(()=>$('#quickCaptureAmount')?.focus(),motionMs(160));
+  if(window.matchMedia('(pointer: fine)').matches)setTimeout(()=>{try{$('#quickCaptureAmount')?.focus({preventScroll:true})}catch(_){}},motionMs(160));
 }
 
 function renderTransactions(){
@@ -2215,28 +2418,48 @@ function openAdvancedSettings(){
 }
 function runIntegrityCheck(){
   const issues=[];
-  const accountIds=new Set(state.accounts.map(a=>a.id)),catIds=new Set(state.categories.map(c=>c.id));
+  const add=(msg)=>issues.push(msg);
+  const duplicateIds=(rows,label)=>{const seen=new Set();rows.forEach(x=>{if(!x?.id)add(`${label}: запись без ID`);else if(seen.has(x.id))add(`${label}: повторяющийся ID`);else seen.add(x.id)})};
+  duplicateIds(state.accounts,'Счета');duplicateIds(state.categories,'Категории');duplicateIds(state.transactions,'Операции');duplicateIds(state.plans,'Планы');duplicateIds(state.budgets,'Бюджеты');duplicateIds(state.goals,'Цели');
+  const accountIds=new Set(state.accounts.map(a=>a.id)),catIds=new Set(state.categories.map(c=>c.id)),planIds=new Set(state.plans.map(p=>p.id)),txIds=new Set(state.transactions.map(t=>t.id));
   state.transactions.forEach(t=>{
-    if(!['income','expense','transfer'].includes(t.type))issues.push('Операция с неизвестным типом');
-    if(!(Number(t.amount)>0))issues.push('Операция с некорректной суммой');
-    if(!t.accountId||!accountIds.has(t.accountId))issues.push('Операция с удалённым или отсутствующим счётом');
-    if(t.type!=='transfer'&&t.categoryId&&!catIds.has(t.categoryId))issues.push('Операция с удалённой категорией');
-    if(t.type==='transfer'){
-      if(!t.toAccountId||!accountIds.has(t.toAccountId))issues.push('Перевод без корректного счёта назначения');
-      if(t.accountId===t.toAccountId)issues.push('Перевод на тот же счёт');
+    if(!['income','expense','transfer'].includes(t.type))add('Операция с неизвестным типом');
+    if(!(Number(t.amount)>0))add('Операция с некорректной суммой');
+    if(!t.accountId||!accountIds.has(t.accountId))add('Операция с удалённым или отсутствующим счётом');
+    if(t.type!=='transfer'){
+      const c=category(t.categoryId);if(!c)add('Операция без корректной категории');else if(c.type!==t.type)add('Категория операции не соответствует её типу');
     }
-    if(t.date&&t.date>todayISO())issues.push('Фактическая операция датирована будущим');
+    if(t.type==='transfer'){
+      if(!t.toAccountId||!accountIds.has(t.toAccountId))add('Перевод без корректного счёта назначения');
+      if(t.accountId===t.toAccountId)add('Перевод на тот же счёт');
+    }
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(t.date||''))add('Операция с некорректной датой');
+    else if(t.date>todayISO())add('Фактическая операция датирована будущим');
   });
   state.plans.forEach(p=>{
-    if(!(Number(p.amount)>0))issues.push('План с некорректной суммой');
-    if(p.accountId&&!accountIds.has(p.accountId))issues.push('План с удалённым счётом');
-    if(p.categoryId&&!catIds.has(p.categoryId))issues.push('План с удалённой категорией');
-    if(p.endDate&&p.date&&p.endDate<p.date)issues.push('План с окончанием раньше начала');
+    if(!['income','expense'].includes(p.type))add('План с неизвестным типом');
+    if(!(Number(p.amount)>0))add('План с некорректной суммой');
+    if(!p.accountId||!accountIds.has(p.accountId))add('План с удалённым или отсутствующим счётом');
+    const c=category(p.categoryId);if(!c)add('План без корректной категории');else if(c.type!==p.type)add('Категория плана не соответствует его типу');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(p.date||''))add('План с некорректной датой');
+    if(p.endDate&&p.date&&p.endDate<p.date)add('План с окончанием раньше начала');
   });
-  state.budgets.forEach(b=>{if(!catIds.has(b.categoryId))issues.push('Бюджет с удалённой категорией');if(Number(b.limit)<0)issues.push('Бюджет с отрицательным лимитом')});
-  state.goals.forEach(g=>{if(Number(g.target)<0||Number(g.saved)<0)issues.push('Цель с отрицательной суммой')});
+  state.planCompletions.forEach(x=>{if(!planIds.has(x.planId))add('Проведение ссылается на удалённый план');if(x.transactionId&&!txIds.has(x.transactionId))add('Проведение ссылается на удалённую операцию')});
+  state.budgets.forEach(b=>{const c=category(b.categoryId);if(!c)add('Бюджет с удалённой категорией');else if(c.type!=='expense')add('Бюджет привязан не к категории расходов');if(Number(b.limit)<0)add('Бюджет с отрицательным лимитом')});
+  state.goals.forEach(g=>{if(Number(g.target)<0||Number(g.saved)<0)add('Цель с отрицательной суммой')});
+  const b=businessData();duplicateIds(b.orders,'Заказы бизнеса');duplicateIds(b.customerPayments,'Платежи клиентов');duplicateIds(b.factoryPayments,'Оплаты заводу');duplicateIds(b.inputVat,'Vorsteuer');duplicateIds(b.vatPayments,'Оплаты НДС');duplicateIds(b.vatCorrections,'Корректировки НДС');duplicateIds(b.adjustments,'Корректировки бизнеса');
+  b.orders.forEach(x=>{if(!(Number(x.totalAmount)>0)||Number(x.factoryCost)<0)add('Бизнес-заказ с некорректной суммой');if(x.taxable&&(Number(x.vatRate)<0||Number(x.vatRate)>100))add('Заказ с некорректной ставкой НДС')});
+  b.customerPayments.forEach(x=>{const o=businessOrder(x.orderId);if(!o)add('Платёж клиента без существующего заказа');if(!(Number(x.amount)>0))add('Платёж клиента с некорректной суммой');if(!['card','cash'].includes(x.method))add('Платёж клиента с неизвестным способом оплаты');if((x.date||'')>todayISO())add('Платёж клиента датирован будущим')});
+  b.orders.forEach(o=>{if(businessOrderReceivedBasis(o.id)>Number(o.totalAmount||0)+.001)add(`Платежи превышают стоимость заказа: ${o.title||'без названия'}`)});
+  b.factoryPayments.forEach(x=>{if(!(Number(x.amount)>0))add('Оплата заводу с некорректной суммой');if((x.date||'')>todayISO())add('Оплата заводу датирована будущим')});
+  b.inputVat.forEach(x=>{if(!(Number(x.amount)>0))add('Vorsteuer с некорректной суммой');if((x.date||'')>todayISO())add('Vorsteuer датирована будущим')});
+  b.vatPayments.forEach(x=>{if(Number(x.amount)<0||!x.periodKey)add('Некорректная оплата НДС');if((x.date||'')>todayISO())add('Оплата НДС датирована будущим')});
+  b.vatCorrections.forEach(x=>{if(!Number(x.amount)||!x.periodKey)add('Некорректная корректировка НДС')});
+  b.adjustments.forEach(x=>{if(!['card','cash'].includes(x.account)||!Number.isFinite(Number(x.amount)))add('Некорректная корректировка бизнеса')});
+  if(businessPaidTotal()>businessCostTotal()+.001)add('Оплачено заводу больше общей закупочной стоимости');
   const unique=[...new Set(issues)];
-  showToast(unique.length?`Найдено проблем: ${unique.length}`:'Данные выглядят целостными');
+  if(!unique.length){showToast('Данные выглядят целостными');return}
+  openSheet(`<div class="sheet-head"><div><h3>Проверка данных</h3><p class="sheet-subtitle">Найдено проблем: ${unique.length}</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div><div class="integrity-list list-surface">${unique.slice(0,40).map(x=>`<div class="integrity-row"><span>${uiIcon('info')}</span><strong>${esc(x)}</strong></div>`).join('')}</div>${unique.length>40?`<div class="notice">Показаны первые 40 типов проблем.</div>`:''}<button class="primary-btn sheet-close" type="button">Понятно</button>`);
 }
 
 function openMonthCloseSheet(){
@@ -2369,7 +2592,7 @@ function renderMore(){
 
     <details class="tech-details section"><summary>Диагностика</summary><div class="diagnostics list-surface">
       <div><span>Версия приложения</span><strong>${APP_VERSION}</strong></div>
-      <div><span>Версия данных</span><strong>${state.version||9}</strong></div>
+      <div><span>Версия данных</span><strong>${state.version??11}</strong></div>
       <div><span>Операций</span><strong>${state.transactions.length}</strong></div>
       <div><span>Планов</span><strong>${state.plans.length}</strong></div>
       <div><span>Хранение</span><strong>IndexedDB · локально</strong></div>
@@ -2389,6 +2612,8 @@ async function completePlannedOccurrence(planId,dateISO){
   state.planCompletions.push({planId,date:dateISO,transactionId,completedAt:Date.now()});
   state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[p.type]:p.accountId||state.accounts[0]?.id};
   if(p.categoryId)state.settings.lastCategoryByType={...(state.settings.lastCategoryByType||{}),[p.type]:p.categoryId};
+  const sheetWasOpen=!$('#sheet')?.classList.contains('hidden');
+  if(sheetWasOpen)closeSheet();
   render({motion:'refresh'});showToast('Плановая операция проведена','Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})});
   try{await persist()}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить · операция отменена')}
 }
@@ -2465,11 +2690,13 @@ function installSheetPhysics(sheet,backdrop){
   let offset=0;
   let tracking=false;
   let ignored=false;
+  let axisLock='';
+  let startedAtTop=false;
   let settleAnimation=null;
   let settleTimer=null;
 
   const ignoreTarget=target=>target instanceof Element && Boolean(target.closest(
-    'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell,[data-horizontal-scroller],.filter-row,.forecast-range-tabs,.pill-tabs,.saved-scenarios'
+    'input,textarea,select,[contenteditable="true"],input[type="range"],.interactive-chart,.chart-shell,.filter-row,.forecast-range-tabs,.pill-tabs,.saved-scenarios'
   ));
 
   const maxScroll=()=>Math.max(0,scroller.scrollHeight-scroller.clientHeight);
@@ -2555,8 +2782,9 @@ function installSheetPhysics(sheet,backdrop){
     startX=touch.clientX;
     startY=lastY=touch.clientY;
     lastT=performance.now();
-    lastVelocity=0;offset=0;mode='';tracking=true;
+    lastVelocity=0;offset=0;mode='';axisLock='';tracking=true;
     ignored=ignoreTarget(e.target);
+    startedAtTop=atTop();
   };
 
   const onTouchMove=e=>{
@@ -2575,12 +2803,12 @@ function installSheetPhysics(sheet,backdrop){
 
     if(!mode){
       if(Math.hypot(totalDx,totalDy)<5)return;
-      // Do not let a mostly-horizontal gesture become a vertical sheet drag.
-      // This is essential for category/account rails on iOS and Android.
-      if(Math.abs(totalDx)>Math.abs(totalDy)*1.12)return;
+      if(!axisLock)axisLock=Math.abs(totalDx)>Math.abs(totalDy)*1.12?'x':'y';
+      // Once a gesture is classified as horizontal it stays horizontal.
+      if(axisLock==='x')return;
 
       if(atTop() && totalDy>0){
-        activate('sheet-down',y,startY);
+        activate('sheet-down',y,startedAtTop?startY:previousY);
       }else if(atBottom() && frameDy<0){
         activate('rubber-bottom',y,previousY);
       }else if(!scrollable() && totalDy<0){
@@ -2720,7 +2948,7 @@ function openSheet(html){
   setTimeout(()=>{
     if(sheet.classList.contains('hidden'))return;
     const auto=sheet.querySelector('.quick-amount input, input[autofocus]');
-    if(auto && !window.matchMedia('(pointer: fine)').matches) {
+    if(auto && window.matchMedia('(pointer: fine)').matches) {
       try{auto.focus({preventScroll:true})}catch(_){auto.focus()}
     }
   },motionMs(635));
@@ -2780,20 +3008,60 @@ function setFormError(form,msg=''){
   box.textContent=msg;box.classList.toggle('hidden',!msg);
   if(msg)box.animate([{opacity:0,transform:'translateY(-3px)'},{opacity:1,transform:'translateY(0)'}],{duration:motionMs(180),easing:'ease-out'});
 }
+function revealChoiceInScroller(el){
+  if(!el)return;
+  const rail=el.closest('[data-horizontal-scroller]');
+  if(!rail)return;
+  const rr=rail.getBoundingClientRect(),er=el.getBoundingClientRect();
+  const max=Math.max(0,rail.scrollWidth-rail.clientWidth);
+  const delta=(er.left+er.width/2)-(rr.left+rr.width/2);
+  rail.scrollLeft=Math.max(0,Math.min(max,rail.scrollLeft+delta));
+}
+
 function openTransactionSheet(existing=null,initialType='expense',template=null){
   if(!state.accounts.length){showToast('Сначала добавьте хотя бы один счёт');openAccountsManager();return}
   const requestedType=existing?.type||template?.type||initialType;
   if(requestedType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');openAccountsManager();return}
   let type=requestedType;
+  const source={...(template||{}),...(existing||{})};
+  let draft={...source,date:source.date||todayISO()};
+  const categoryByType={
+    expense:category(source.categoryId)?.type==='expense'?source.categoryId:state.settings.lastCategoryByType?.expense,
+    income:category(source.categoryId)?.type==='income'?source.categoryId:state.settings.lastCategoryByType?.income
+  };
+  const accountByType={
+    expense:source.type==='expense'?source.accountId:state.settings.lastAccountByType?.expense,
+    income:source.type==='income'?source.accountId:state.settings.lastAccountByType?.income,
+    transfer:source.type==='transfer'?source.accountId:state.settings.lastAccountByType?.transfer
+  };
+
+  const captureDraft=()=>{
+    const form=$('#txForm');if(!form)return;
+    const fd=new FormData(form);
+    draft={...draft,
+      amount:fd.get('amount')??draft.amount??'',
+      date:String(fd.get('date')||draft.date||todayISO()),
+      merchant:String(fd.get('merchant')??draft.merchant??''),
+      note:String(fd.get('note')??draft.note??''),
+      toAccountId:String(fd.get('toAccountId')||draft.toAccountId||'')
+    };
+    const accountId=String(fd.get('accountId')||'');
+    if(accountId){accountByType[type]=accountId;draft.accountId=accountId}
+    const categoryId=String(fd.get('categoryId')||'');
+    if(type!=='transfer'&&categoryId){categoryByType[type]=categoryId;draft.categoryId=categoryId}
+  };
+
   const build=()=>{
     const recent=[...state.transactions].filter(x=>x.type===type).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
-    const t=existing||template||{};
+    const t=draft;
     const isTransfer=type==='transfer';
-    const accountCandidates=[t.accountId,state.settings.lastAccountByType?.[type],recent?.accountId,state.accounts[0]?.id];
+    const accountCandidates=[accountByType[type],t.accountId,state.settings.lastAccountByType?.[type],recent?.accountId,state.accounts[0]?.id];
     const defaultAccount=accountCandidates.find(id=>id&&account(id))||state.accounts[0]?.id;
+    accountByType[type]=defaultAccount;
     const cats=state.categories.filter(c=>c.type===type);
-    const categoryCandidates=[t.categoryId,state.settings.lastCategoryByType?.[type],recent?.categoryId,cats[0]?.id];
+    const categoryCandidates=[categoryByType[type],t.categoryId,state.settings.lastCategoryByType?.[type],recent?.categoryId,cats[0]?.id];
     const defaultCategory=categoryCandidates.find(id=>id&&category(id)?.type===type)||cats[0]?.id||'';
+    if(!isTransfer)categoryByType[type]=defaultCategory;
     const toCandidates=[t.toAccountId,recent?.toAccountId,state.accounts.find(a=>a.id!==defaultAccount)?.id];
     const defaultTo=toCandidates.find(id=>id&&id!==defaultAccount&&account(id))||'';
     const quickCats=cats;
@@ -2801,7 +3069,7 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
     openSheet(`<div class="sheet-head quick-sheet-head"><h3>${existing?'Изменить операцию':template?'Повторить операцию':type==='expense'?'Новый расход':type==='income'?'Новый доход':'Перевод'}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
       <div class="segmented tx-segmented"><button data-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-type="income" class="${type==='income'?'active':''}">Доход</button><button data-type="transfer" class="${type==='transfer'?'active':''}">Перевод</button></div>
       <form id="txForm" class="quick-tx-form">
-        <div class="quick-amount"><input id="txAmount" class="amount-input" name="amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00" required value="${esc(t.amount||'')}"><span>€</span></div>
+        <div class="quick-amount"><input id="txAmount" class="amount-input" name="amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00" required value="${esc(t.amount??'')}"><span>€</span></div>
         ${!isTransfer?`
           <input type="hidden" name="categoryId" id="categoryHidden" value="${esc(defaultCategory||'')}">
           <input type="hidden" name="accountId" id="accountHidden" value="${esc(defaultAccount||'')}">
@@ -2814,17 +3082,34 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
           <details class="advanced-details" ${existing?'open':''}><summary>Дата, комментарий и другие варианты</summary><div class="advanced-body">
             <div class="field"><label>Все категории</label><select id="categorySelectFull">${categoryOptions(type,defaultCategory)}</select></div>
             <div class="field"><label>Все счета</label><select id="accountSelectFull">${accountOptions(defaultAccount)}</select></div>
-            <div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(existing?t.date:todayISO())}"></div>
+            <div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div>
             <div class="field"><label>Получатель / магазин</label><input name="merchant" maxlength="60" placeholder="Например: REWE" value="${esc(t.merchant||'')}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Необязательно" value="${esc(t.note||'')}"></div>
           </div></details>`:`
-          <div class="transfer-grid"><div class="field"><label>Откуда</label><select name="accountId">${accountOptions(defaultAccount)}</select></div><div class="transfer-arrow">${uiIcon('transfer')}</div><div class="field"><label>Куда</label><select name="toAccountId">${accountOptions(defaultTo,defaultAccount)}</select></div></div>
-          <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(existing?t.date:todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
+          <div class="transfer-grid"><div class="field"><label>Откуда</label><select name="accountId" id="transferFrom">${accountOptions(defaultAccount)}</select></div><div class="transfer-arrow">${uiIcon('transfer')}</div><div class="field"><label>Куда</label><select name="toAccountId" id="transferTo">${accountOptions(defaultTo,defaultAccount)}</select></div></div>
+          <details class="advanced-details" ${existing?'open':''}><summary>Дата и комментарий</summary><div class="advanced-body"><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'')}"></div></div></details>`}
         <div class="form-error hidden" role="alert"></div>
         <button class="primary-btn quick-save" type="submit">${existing?'Сохранить':type==='expense'?'Добавить расход':type==='income'?'Добавить доход':'Перевести'}</button>
         ${existing?'<button class="secondary-btn" type="button" id="repeatTx">Повторить</button><button class="danger-btn" type="button" id="deleteTx">Удалить</button>':''}
       </form>`);
-    $$('[data-type]').forEach(b=>b.onclick=()=>{const nextType=b.dataset.type;if(nextType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');return}type=nextType;build()});
-    $$('[data-quick-category]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickCategory;$('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===id));const sel=$('#categorySelectFull');if(sel)sel.value=id});
+
+    $$('[data-type]').forEach(b=>b.onclick=()=>{
+      const nextType=b.dataset.type;
+      if(nextType==='transfer'&&state.accounts.length<2){showToast('Для перевода нужны как минимум два счёта');return}
+      captureDraft();type=nextType;draft.type=type;build();
+    });
+    $$('[data-quick-category]').forEach(b=>b.onclick=()=>{
+      const id=b.dataset.quickCategory;categoryByType[type]=id;draft.categoryId=id;
+      $('#categoryHidden').value=id;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===id));
+      const sel=$('#categorySelectFull');if(sel)sel.value=id;
+      revealChoiceInScroller($(`.choice-scroller [data-quick-category="${CSS.escape(id)}"]`));
+      // A category chosen from the expanded fallback is now selected, so return
+      // to the compact form instead of leaving a very tall grid open.
+      if(b.closest('#allCategoriesGrid')){
+        const grid=$('#allCategoriesGrid'),more=$('#toggleAllCategories');
+        grid?.classList.add('hidden');grid?.setAttribute('aria-hidden','true');
+        if(more){more.setAttribute('aria-expanded','false');more.textContent='Все'}
+      }
+    });
     const toggleAllCategories=$('#toggleAllCategories');
     if(toggleAllCategories)toggleAllCategories.onclick=()=>{
       const grid=$('#allCategoriesGrid');if(!grid)return;
@@ -2833,13 +3118,37 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       toggleAllCategories.setAttribute('aria-expanded',String(opening));
       toggleAllCategories.textContent=opening?'Свернуть':'Все';
     };
-    $$('[data-quick-account]').forEach(b=>b.onclick=()=>{const id=b.dataset.quickAccount;$('#accountHidden').value=id;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x===b));const sel=$('#accountSelectFull');if(sel)sel.value=id});
-    const catSel=$('#categorySelectFull');if(catSel)catSel.onchange=e=>{$('#categoryHidden').value=e.target.value;$$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===e.target.value))};
-    const accSel=$('#accountSelectFull');if(accSel)accSel.onchange=e=>{$('#accountHidden').value=e.target.value;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x.dataset.quickAccount===e.target.value))};
-    // Keep the current choice in view, while preserving a stable category order.
+    $$('[data-quick-account]').forEach(b=>b.onclick=()=>{
+      const id=b.dataset.quickAccount;accountByType[type]=id;draft.accountId=id;
+      $('#accountHidden').value=id;$$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x===b));
+      const sel=$('#accountSelectFull');if(sel)sel.value=id;revealChoiceInScroller(b);
+    });
+    const catSel=$('#categorySelectFull');if(catSel)catSel.onchange=e=>{
+      const id=e.target.value;categoryByType[type]=id;draft.categoryId=id;$('#categoryHidden').value=id;
+      $$('[data-quick-category]').forEach(x=>x.classList.toggle('active',x.dataset.quickCategory===id));
+      revealChoiceInScroller($(`.choice-scroller [data-quick-category="${CSS.escape(id)}"]`));
+    };
+    const accSel=$('#accountSelectFull');if(accSel)accSel.onchange=e=>{
+      const id=e.target.value;accountByType[type]=id;draft.accountId=id;$('#accountHidden').value=id;
+      $$('[data-quick-account]').forEach(x=>x.classList.toggle('active',x.dataset.quickAccount===id));
+      revealChoiceInScroller($(`.choice-scroller [data-quick-account="${CSS.escape(id)}"]`));
+    };
+    if(isTransfer){
+      const from=$('#transferFrom'),to=$('#transferTo');
+      const refreshTo=()=>{
+        if(!from||!to)return;
+        const preferred=to.value||draft.toAccountId||'';
+        to.innerHTML=accountOptions(preferred,from.value);
+        if(!to.value)to.value=state.accounts.find(a=>a.id!==from.value)?.id||'';
+        accountByType.transfer=from.value;draft.accountId=from.value;draft.toAccountId=to.value;
+      };
+      if(from)from.onchange=refreshTo;
+      if(to)to.onchange=()=>{draft.toAccountId=to.value};
+      refreshTo();
+    }
     requestAnimationFrame(()=>{
-      $('[data-quick-category].active')?.scrollIntoView({block:'nearest',inline:'center'});
-      $('[data-quick-account].active')?.scrollIntoView({block:'nearest',inline:'center'});
+      revealChoiceInScroller($('.choice-scroller [data-quick-category].active'));
+      revealChoiceInScroller($('.choice-scroller [data-quick-account].active'));
     });
     $('#txForm').onsubmit=e=>{
       e.preventDefault(); const form=e.currentTarget; const fd=new FormData(form); const amount=Number(fd.get('amount'));
@@ -2848,6 +3157,7 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       const obj={id:existing?.id||uid(),type,amount,date:fd.get('date')||todayISO(),accountId:fd.get('accountId'),toAccountId:type==='transfer'?fd.get('toAccountId'):null,categoryId:type==='transfer'?null:fd.get('categoryId'),merchant:type==='transfer'?'':String(fd.get('merchant')||'').trim(),note:String(fd.get('note')||'').trim(),needsReview:false,isAdjustment:Boolean(existing?.isAdjustment),createdAt:existing?.createdAt||Date.now()};
       if(obj.date>todayISO()){setFormError(form,'Фактическая операция не может быть датирована будущим. Для будущих платежей используйте План.');return}
       if(!account(obj.accountId)){setFormError(form,'Выберите существующий счёт.');return}
+      if(type!=='transfer'&&(!obj.categoryId||category(obj.categoryId)?.type!==type)){setFormError(form,'Выберите категорию для этого типа операции.');return}
       if(type==='transfer'){
         if(!obj.toAccountId||!account(obj.toAccountId)){setFormError(form,'Выберите счёт назначения.');return}
         if(obj.accountId===obj.toAccountId){setFormError(form,'Для перевода выберите два разных счёта.');return}
@@ -2859,35 +3169,49 @@ function openTransactionSheet(existing=null,initialType='expense',template=null)
       closeSheet();render({motion:'refresh'});showToast(existing?'Операция обновлена':'Операция добавлена');
       persist().catch(()=>{state=previous;render({motion:'none'});showToast('Не удалось сохранить · изменение отменено')});
     };
-    const repeat=$('#repeatTx'); if(repeat)repeat.onclick=()=>openTransactionSheet(null,existing.type,existing);
-    const del=$('#deleteTx'); if(del)del.onclick=async()=>{
-      const removed={...existing}; const removedCompletions=state.planCompletions.filter(x=>x.transactionId===existing.id);
-      state.transactions=state.transactions.filter(x=>x.id!==existing.id);state.planCompletions=state.planCompletions.filter(x=>x.transactionId!==existing.id);
-      await persist();closeSheet();render();showToast('Операция удалена','Отменить',async()=>{state.transactions.push(removed);state.planCompletions.push(...removedCompletions);await persist();render();showToast('Удаление отменено')});
-    };
-    if(!existing&&!template) setTimeout(()=>$('#txAmount')?.focus(),motionMs(180));
+    const repeat=$('#repeatTx'); if(repeat)repeat.onclick=()=>{captureDraft();openTransactionSheet(null,type,{...existing,...draft,type})};
+    const del=$('#deleteTx'); if(del)del.onclick=()=>{closeSheet();deleteTransactionWithUndo(existing)};
+    if(!existing&&!template&&window.matchMedia('(pointer: fine)').matches)setTimeout(()=>{try{$('#txAmount')?.focus({preventScroll:true})}catch(_){}},motionMs(180));
   }; build();
 }
 
 function openPlanSheet(existing=null,initialDate=null,template=null){
   if(!state.accounts.length){showToast('Сначала добавьте счёт');return}
   let type=existing?.type||template?.type||'expense';
+  const source={...(template||{}),...(existing||{})};
+  let draft={...source,date:initialDate||source.date||todayISO()};
+  const categoryByType={
+    expense:category(source.categoryId)?.type==='expense'?source.categoryId:state.settings.lastCategoryByType?.expense,
+    income:category(source.categoryId)?.type==='income'?source.categoryId:state.settings.lastCategoryByType?.income
+  };
+  const captureDraft=()=>{
+    const form=$('#planForm');if(!form)return;
+    const fd=new FormData(form);
+    const cat=String(fd.get('categoryId')||'');if(cat)categoryByType[type]=cat;
+    draft={...draft,
+      title:String(fd.get('title')??draft.title??''),amount:fd.get('amount')??draft.amount??'',categoryId:cat||draft.categoryId,
+      frequency:String(fd.get('frequency')||draft.frequency||'once'),date:String(fd.get('date')||draft.date||todayISO()),
+      endDate:String(fd.get('endDate')||''),accountId:String(fd.get('accountId')||draft.accountId||state.accounts[0]?.id||''),
+      required:type==='expense'?fd.get('required')==='on':false
+    };
+  };
   const build=()=>{
-    const p=existing||template||{date:initialDate||todayISO()};
-    if(!existing&&template&&initialDate)p.date=initialDate;
+    const p=draft;
+    const selectedCategory=[categoryByType[type],p.categoryId,state.categories.find(c=>c.type===type)?.id].find(id=>id&&category(id)?.type===type)||'';
+    categoryByType[type]=selectedCategory;
     openSheet(`<div class="sheet-head"><h3>${existing?'Изменить план':template?'Создать план из операции':'Новая плановая операция'}</h3><button class="sheet-close">×</button></div>
       <div class="segmented" style="grid-template-columns:1fr 1fr"><button data-plan-type="expense" class="${type==='expense'?'active':''}">Расход</button><button data-plan-type="income" class="${type==='income'?'active':''}">Доход</button></div>
       <form id="planForm"><div class="form-grid">
         <div class="field full"><label>Название</label><input name="title" required placeholder="Например: аренда, зарплата или BAföG" value="${esc(p.title||'')}"></div>
-        <div class="field full"><label>Сумма</label><input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal" value="${esc(p.amount||'')}"></div>
-        <div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,p.categoryId)}</select></div>
-        ${type==='expense'?`<label class="switch-row full"><input name="required" type="checkbox" ${p.required!==false?'checked':''}><span><strong>Обязательный платёж</strong><small>Учитывать при расчёте реально свободных денег</small></span></label>`:''}
+        <div class="field full"><label>Сумма</label><input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal" value="${esc(p.amount??'')}"></div>
+        <div class="field full"><label>Категория</label><select name="categoryId">${categoryOptions(type,selectedCategory)}</select></div>
+        ${type==='expense'?`<label class="switch-row full"><input name="required" type="checkbox" ${p.required!==false?'checked':''}><span><strong>Обязательный платёж</strong><small>Если платёж просрочен, он останется обязательством в безопасном расчёте</small></span></label>`:''}
         <div class="field"><label>Повтор</label><select name="frequency" id="planFrequency">${[['once','Один раз'],['weekly','Каждую неделю'],['biweekly','Каждые 2 недели'],['monthly','Каждый месяц'],['quarterly','Каждые 3 месяца'],['yearly','Каждый год']].map(([v,n])=>`<option value="${v}" ${p.frequency===v||(!p.frequency&&v==='once')?'selected':''}>${n}</option>`).join('')}</select></div>
         <div class="field"><label id="planDateLabel">${p.frequency&&p.frequency!=='once'?'Первый платёж':'Дата'}</label><input name="date" type="date" required value="${esc(p.date||todayISO())}"></div>
         <div class="field full ${p.frequency&&p.frequency!=='once'?'':'hidden'}" id="planEndField"><label>Дата окончания <span class="field-hint">необязательно</span></label><input name="endDate" type="date" value="${esc(p.endDate||'')}"><small class="field-help">Оставьте пустым, если платёж идёт без ограничения по времени.</small></div>
         <div class="field full"><label>Счёт</label><select name="accountId">${accountOptions(p.accountId||state.accounts[0]?.id)}</select></div>
-      </div><button class="primary-btn" type="submit">${existing?'Сохранить':'Добавить в план'}</button>${existing?'<button class="danger-btn" type="button" id="deletePlan">Удалить план</button>':''}</form>`);
-    $$('[data-plan-type]').forEach(b=>b.onclick=()=>{type=b.dataset.planType;build()});
+      </div><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">${existing?'Сохранить':'Добавить в план'}</button>${existing?'<button class="danger-btn" type="button" id="deletePlan">Удалить план</button>':''}</form>`);
+    $$('[data-plan-type]').forEach(b=>b.onclick=()=>{captureDraft();type=b.dataset.planType;draft.type=type;build()});
     const freq=$('#planFrequency');
     if(freq)freq.onchange=()=>{
       const recurring=freq.value!=='once';
@@ -2895,21 +3219,24 @@ function openPlanSheet(existing=null,initialDate=null,template=null){
       if($('#planDateLabel'))$('#planDateLabel').textContent=recurring?'Первый платёж':'Дата';
     };
     $('#planForm').onsubmit=async e=>{
-      e.preventDefault();
-      const fd=new FormData(e.currentTarget);
-      const frequency=fd.get('frequency');
-      const date=fd.get('date');
-      const endDate=frequency!=='once'?String(fd.get('endDate')||''):'';
-      if(endDate && endDate<date){showToast('Дата окончания не может быть раньше начала');return}
-      const obj={id:existing?.id||uid(),type,title:String(fd.get('title')).trim(),amount:Number(fd.get('amount')),categoryId:fd.get('categoryId'),frequency,date,endDate,accountId:fd.get('accountId'),required:type==='expense'?fd.get('required')==='on':false};
+      e.preventDefault();const form=e.currentTarget;setFormError(form,'');
+      const fd=new FormData(form),frequency=fd.get('frequency'),date=fd.get('date'),endDate=frequency!=='once'?String(fd.get('endDate')||''):'';
+      const amount=Number(fd.get('amount'));const categoryId=String(fd.get('categoryId')||'');const accountId=String(fd.get('accountId')||'');
+      if(!(amount>0)){setFormError(form,'Введите сумму больше нуля.');return}
+      if(!date){setFormError(form,'Выберите дату.');return}
+      if(endDate&&endDate<date){setFormError(form,'Дата окончания не может быть раньше начала.');return}
+      if(!account(accountId)){setFormError(form,'Выберите существующий счёт.');return}
+      if(!categoryId||category(categoryId)?.type!==type){setFormError(form,'Выберите категорию для этого типа плана.');return}
+      const obj={id:existing?.id||uid(),type,title:String(fd.get('title')).trim(),amount,categoryId,frequency,date,endDate,accountId,required:type==='expense'?fd.get('required')==='on':false};
+      if(!obj.title){setFormError(form,'Введите название плана.');return}
       if(existing)state.plans=state.plans.map(x=>x.id===existing.id?obj:x);else state.plans.push(obj);
       await persist();closeSheet();render();showToast('План сохранён');
     };
     const del=$('#deletePlan');if(del)del.onclick=async()=>{
-      const removed={...existing};
-      state.plans=state.plans.filter(x=>x.id!==existing.id);
+      const removed={...existing};const removedCompletions=state.planCompletions.filter(x=>x.planId===existing.id);
+      state.plans=state.plans.filter(x=>x.id!==existing.id);state.planCompletions=state.planCompletions.filter(x=>x.planId!==existing.id);
       await persist();closeSheet();render();
-      showToast('План удалён','Отменить',async()=>{state.plans.push(removed);await persist();render();showToast('Удаление отменено')});
+      showToast('План удалён','Отменить',async()=>{state.plans.push(removed);state.planCompletions.push(...removedCompletions);await persist();render();showToast('Удаление отменено')});
     };
   };build();
 }
@@ -3046,21 +3373,15 @@ function bindShell(){
       holdTimer=setTimeout(()=>{held=true;holdTimer=null;pulseElement(fab);openQuickAddMenu()},430);
     },{passive:false});
     fab.addEventListener('pointermove',e=>{if(pointerId!==e.pointerId)return;if(Math.hypot(e.clientX-startX,e.clientY-startY)>10)cancelHold()},{passive:true});
-    fab.addEventListener('pointerup',e=>{if(pointerId!==e.pointerId)return;pointerId=null;cancelHold();if(held)return;if(currentWorkspace()==='business')openBusinessSaleSheet();else if(activeTab==='plan')openPlanSheet();else if(activeTab==='more')openQuickAddMenu();else openTransactionSheet(null,'expense')});
+    fab.addEventListener('pointerup',e=>{if(pointerId!==e.pointerId)return;pointerId=null;cancelHold();if(held)return;if(currentWorkspace()==='business')openBusinessOrderSheet();else if(activeTab==='plan')openPlanSheet();else if(activeTab==='more')openQuickAddMenu();else openTransactionSheet(null,'expense')});
     fab.addEventListener('pointercancel',()=>{pointerId=null;cancelHold()});
   }
   $('#sheetBackdrop').onclick=closeSheet;
   $('#privacyToggle').onclick=async()=>{state.settings.privacy=!state.settings.privacy;$('#privacyIcon').innerHTML=uiIcon(state.settings.privacy?'eyeoff':'eye');await persist();render()};
   $('#importInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)handleImport(f);e.target.value=''})
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
-  document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
-  let lastTouchEnd=0;
-  document.addEventListener('touchend',e=>{
-    const now=Date.now();
-    if(now-lastTouchEnd<320){ e.preventDefault(); }
-    lastTouchEnd=now;
-  },{passive:false});
-  ['gesturestart','gesturechange','gestureend'].forEach(name=>document.addEventListener(name,e=>e.preventDefault(),{passive:false}));
+  document.addEventListener('dblclick',e=>{if(!isEditableTarget(e.target))e.preventDefault()},{passive:false});
+  ['gesturestart','gesturechange','gestureend'].forEach(name=>document.addEventListener(name,e=>{if(!isEditableTarget(e.target))e.preventDefault()},{passive:false}));
   window.addEventListener('pagehide',rememberViewState,{passive:true});
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')rememberViewState()},{passive:true});
 }
@@ -3098,17 +3419,10 @@ async function init(){
     const registerServiceWorker=async()=>{
       try{
         const reg=await navigator.serviceWorker.register(`./service-worker.js?v=${APP_VERSION}`,{updateViaCache:'none'});
-        await reg.update();
-        if(reg.waiting){
-          showToast('Доступна новая версия','Обновить',()=>{
-            reg.waiting?.postMessage({type:'SKIP_WAITING'});
-          });
-        }
         navigator.serviceWorker.addEventListener('controllerchange',()=>{
-          if(!sessionStorage.getItem('sw-reloaded')){
-            sessionStorage.setItem('sw-reloaded','1');
-            location.reload();
-          }
+          if(swReloading)return;
+          swReloading=true;
+          location.reload();
         });
         reg.addEventListener('updatefound',()=>{
           const w=reg.installing;
@@ -3118,6 +3432,15 @@ async function init(){
             }
           });
         });
+        // Attach lifecycle listeners before requesting an update. The worker
+        // calls skipWaiting during install, so controllerchange can otherwise
+        // happen before this page is listening for it.
+        await reg.update();
+        if(reg.waiting){
+          showToast('Доступна новая версия','Обновить',()=>{
+            reg.waiting?.postMessage({type:'SKIP_WAITING'});
+          });
+        }
       }catch(_){}
     };
     if(document.readyState==='complete') registerServiceWorker();

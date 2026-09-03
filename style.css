@@ -4369,7 +4369,7 @@ body > .bottom-nav .nav-add{
   }
 }
 
-/* Money App V8.4.1 — transaction sheet horizontal rails ------------------
+/* Money App V8.5.0 — transaction sheet horizontal rails ------------------
    The sheet must allow native horizontal panning in nested category/account
    rails. V8.4.0 restricted the whole sheet to pan-y, which could make those
    rails feel locked on iOS/Android. */
@@ -4477,3 +4477,117 @@ body > .bottom-nav .nav-add{
 @media (min-width:600px){
   .quick-choice-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
+
+/* =========================================================
+   Money App V8.5.0 — sheet reliability & touch stability
+   ========================================================= */
+
+/* The close control must remain reachable even when a long sheet is scrolled.
+   This is intentionally applied to every modal, not only transaction forms. */
+#sheet .sheet-content > .sheet-head{
+  position:sticky!important;
+  top:0!important;
+  z-index:30!important;
+  min-width:0!important;
+  padding:4px 0 10px!important;
+  margin-bottom:12px!important;
+  background:linear-gradient(180deg,rgba(22,29,45,.995) 0%,rgba(22,29,45,.97) 78%,rgba(22,29,45,.88) 100%)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(150%);
+  backdrop-filter:blur(18px) saturate(150%);
+  border-bottom:1px solid rgba(255,255,255,.045);
+}
+#sheet .sheet-content > .sheet-head > *:first-child,
+#sheet .sheet-content > .sheet-head h3{
+  min-width:0;
+}
+#sheet .sheet-content > .sheet-head h3{
+  overflow-wrap:anywhere;
+}
+#sheet .sheet-content > .sheet-head .sheet-close{
+  flex:0 0 44px!important;
+  width:44px!important;
+  height:44px!important;
+  position:relative!important;
+  z-index:2!important;
+}
+#sheet .sheet-content{
+  scroll-padding-top:58px!important;
+}
+
+/* Horizontal pickers may be swiped horizontally, but a vertical finger move
+   must still be able to scroll the enclosing sheet. */
+.choice-scroller[data-horizontal-scroller]{
+  touch-action:pan-x pan-y!important;
+  overscroll-behavior-y:auto!important;
+}
+
+/* A spring-back animation must never make the visible close button untappable. */
+#sheet .sheet-content.sheet-content-rubber{
+  pointer-events:auto!important;
+}
+
+/* Native double-tap handling is no longer globally cancelled in JS. Interactive
+   controls still opt into fast taps without the legacy 300 ms delay. */
+button,
+[role="button"],
+.choice-chip,
+.filter-chip,
+.segmented button,
+.quick-picker-more{
+  touch-action:manipulation;
+}
+
+.integrity-list{overflow:hidden}
+.integrity-row{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  padding:12px 13px;
+  border-bottom:1px solid var(--line-soft);
+}
+.integrity-row:last-child{border-bottom:0}
+.integrity-row .ui-icon{width:17px;height:17px;flex:0 0 17px;color:#ffcc66;margin-top:1px}
+.integrity-row strong{font-size:11px;line-height:1.45;font-weight:600;color:var(--text)}
+
+@media (prefers-color-scheme:light){
+  #sheet .sheet-content > .sheet-head{
+    background:linear-gradient(180deg,rgba(249,251,254,.995) 0%,rgba(249,251,254,.975) 78%,rgba(249,251,254,.90) 100%)!important;
+    border-bottom-color:rgba(20,32,50,.06)!important;
+  }
+}
+
+
+/* =========================================================
+   Money App V9.0.0 — Business cash control + VAT
+   ========================================================= */
+.business-hero-warning{box-shadow:inset 0 0 0 1px rgba(255,123,138,.18)}
+.business-obligation-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}
+.business-obligation-grid>div{min-width:0;padding:12px 13px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.05)}
+.business-obligation-grid span,.vat-summary-card span,.vat-period-hero span{display:block;color:var(--muted);font-size:11px;line-height:1.3}
+.business-obligation-grid b{display:block;margin-top:5px;font-size:16px;overflow-wrap:anywhere}
+.business-ok{margin:11px 0 0;color:var(--muted);font-size:11px;line-height:1.45}
+.vat-summary-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;overflow:hidden;margin-bottom:10px;border:1px solid var(--line-soft);border-radius:18px;background:var(--line-soft)}
+.vat-summary-card>div{min-width:0;padding:14px;background:var(--surface)}
+.vat-summary-card strong{display:block;margin-top:6px;font-size:18px;overflow-wrap:anywhere}
+.vat-summary-card.warning{border-color:rgba(255,123,138,.2)}
+.vat-period-row .settings-icon{font-weight:800;font-size:13px}
+.vat-period-hero{padding:16px;margin-bottom:12px;border-radius:18px;background:linear-gradient(145deg,rgba(124,156,255,.14),rgba(94,215,169,.07));border:1px solid rgba(124,156,255,.16)}
+.vat-period-hero.closed{background:rgba(93,215,169,.07);border-color:rgba(93,215,169,.13)}
+.vat-period-hero strong{display:block;margin:6px 0 4px;font-size:clamp(24px,7vw,34px);letter-spacing:-.04em;overflow-wrap:anywhere}
+.vat-period-hero small{color:var(--muted);font-size:11px}
+.business-tax-fields{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:10px;align-items:end}
+.toggle-row.compact{min-height:54px;margin:0}
+.form-divider{display:flex;align-items:center;gap:10px;margin:18px 0 12px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+.form-divider:before,.form-divider:after{content:"";height:1px;background:var(--line-soft);flex:1}
+.list-button.static{cursor:default}
+.notice.subtle{font-size:10.5px;line-height:1.45;color:var(--muted)}
+@media (max-width:520px){
+  .business-tax-fields{grid-template-columns:1fr}
+  .business-obligation-grid,.vat-summary-card{grid-template-columns:1fr 1fr}
+}
+@media (max-width:350px){
+  .business-obligation-grid,.vat-summary-card{grid-template-columns:1fr}
+}
+
+/* Guard against 1–4 px intrinsic overflow on very narrow Android/Fold widths. */
+#main{overflow-x:clip!important}

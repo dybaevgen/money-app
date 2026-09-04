@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 const STORE = 'app';
 const STATE_KEY = 'state';
 const COLORS = ['#7c9cff','#5dd7a9','#ffcc66','#ff7b8a','#b58cff','#6ed6ff','#ff9f68','#9ad37d','#d990ff','#78cbbf'];
-const APP_VERSION = '9.0.0';
+const APP_VERSION = '9.1.1';
 let undoAction = null;
 let previousTab = 'overview';
 let pageTransitionTimer = null;
@@ -234,7 +234,7 @@ function normalizeState(s){
     },
     accounts:(Array.isArray(s.accounts)?s.accounts:d.accounts).map(a=>({...a,protected:Boolean(a.protected),lastReconciledAt:a.lastReconciledAt||null})),
     categories:Array.isArray(s.categories)?s.categories:d.categories,
-    transactions:Array.isArray(s.transactions)?s.transactions.map(t=>({...t,isAdjustment:Boolean(t.isAdjustment)||t.note==='Корректировка после сверки баланса'})):[],
+    transactions:Array.isArray(s.transactions)?s.transactions.map(t=>{const isAdjustment=Boolean(t.isAdjustment)||t.note==='Корректировка после сверки баланса';return {...t,isAdjustment,adjustmentKind:isAdjustment?(t.adjustmentKind||'reconcile'):t.adjustmentKind}}):[],
     plans:Array.isArray(s.plans)?s.plans.map(p=>({
       ...p,
       frequency:['once','weekly','biweekly','monthly','quarterly','yearly'].includes(p.frequency)?p.frequency:'once',
@@ -347,7 +347,13 @@ function completionFor(planId,date){
 }
 
 function isAnalyticalTransaction(t){
-  return Boolean(t) && !t.isAdjustment;
+  // Reconciliation differences are real unexplained cash-flow. Until they are
+  // classified, count them in total income/expense, but keep them outside
+  // category budgets. Partial classification preserves the same total.
+  return Boolean(t) && t.type!=='transfer';
+}
+function isCategorizedTransaction(t){
+  return isAnalyticalTransaction(t) && !t.isAdjustment;
 }
 function monthTotals(key=monthKey()){
   let income=0, expense=0;
@@ -834,8 +840,14 @@ function freeBalance(){ return safeCashflowForecast().available; }
 
 function expenseByCategory(key=monthKey()){
   const map={};
-  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>map[t.categoryId]=(map[t.categoryId]||0)+Number(t.amount||0));
-  return Object.entries(map).map(([id,value])=>({id,name:category(id)?.name||'Без категории',icon:category(id)?.icon||'•',value})).sort((a,b)=>b.value-a.value);
+  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
+    const id=t.isAdjustment?'__reconcile__':(t.categoryId||'__uncategorized__');
+    map[id]=(map[id]||0)+Number(t.amount||0);
+  });
+  return Object.entries(map).map(([id,value])=>id==='__reconcile__'
+    ?{id,name:'Расход по сверке',icon:'≈',value,system:true}
+    :{id,name:id==='__uncategorized__'?'Без категории':(category(id)?.name||'Без категории'),icon:id==='__uncategorized__'?'•':(category(id)?.icon||'•'),value}
+  ).sort((a,b)=>b.value-a.value);
 }
 
 function monthlySeries(count=6){
@@ -849,7 +861,7 @@ function monthlySeries(count=6){
 
 function budgetSnapshot(key=monthKey()){
   const spentMap={};
-  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
+  state.transactions.filter(t=>isCategorizedTransaction(t)&&t.type==='expense' && (t.date||'').slice(0,7)===key).forEach(t=>{
     spentMap[t.categoryId]=(spentMap[t.categoryId]||0)+Number(t.amount||0);
   });
   return state.budgets.map(b=>{
@@ -879,7 +891,7 @@ function budgetPaceSnapshot(key=monthKey()){
 }
 
 function budgetSuggestions(months=3){
-  const earliest=[...state.transactions].filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&t.date).map(t=>t.date).sort()[0]||'';
+  const earliest=[...state.transactions].filter(t=>isCategorizedTransaction(t)&&t.type==='expense'&&t.date).map(t=>t.date).sort()[0]||'';
   if(!earliest)return [];
   const now=new Date();
   const keys=[];
@@ -892,7 +904,7 @@ function budgetSuggestions(months=3){
   const existing=new Set(state.budgets.map(b=>b.categoryId));
   const out=[];
   state.categories.filter(c=>c.type==='expense'&&!existing.has(c.id)).forEach(c=>{
-    const values=keys.map(key=>state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&t.categoryId===c.id&&(t.date||'').slice(0,7)===key).reduce((s,t)=>s+Number(t.amount||0),0));
+    const values=keys.map(key=>state.transactions.filter(t=>isCategorizedTransaction(t)&&t.type==='expense'&&t.categoryId===c.id&&(t.date||'').slice(0,7)===key).reduce((s,t)=>s+Number(t.amount||0),0));
     const active=values.filter(v=>v>.005).length;
     if(active<2)return;
     const average=values.reduce((s,v)=>s+v,0)/values.length;
@@ -980,17 +992,17 @@ function nextIncomeStatus(){
 }
 function duplicateCandidates(){
   const map=new Map();
-  state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type!=='transfer').forEach(t=>{
+  state.transactions.filter(t=>isCategorizedTransaction(t)&&t.type!=='transfer').forEach(t=>{
     const key=[t.date,t.type,Number(t.amount||0).toFixed(2),t.accountId||'',t.categoryId||''].join('|');
     const arr=map.get(key)||[];arr.push(t);map.set(key,arr);
   });
   return [...map.values()].filter(g=>g.length>1);
 }
 function unusualExpense(){
-  const vals=state.transactions.filter(t=>isAnalyticalTransaction(t)&&t.type==='expense').map(t=>Number(t.amount)||0).filter(v=>v>0).sort((a,b)=>a-b);
+  const vals=state.transactions.filter(t=>isCategorizedTransaction(t)&&t.type==='expense').map(t=>Number(t.amount)||0).filter(v=>v>0).sort((a,b)=>a-b);
   if(vals.length<6)return null;
   const median=vals[Math.floor(vals.length/2)]||0;
-  return [...state.transactions].filter(t=>isAnalyticalTransaction(t)&&t.type==='expense'&&Number(t.amount)>Math.max(150,median*3.5)).sort((a,b)=>Number(b.amount)-Number(a.amount))[0]||null;
+  return [...state.transactions].filter(t=>isCategorizedTransaction(t)&&t.type==='expense'&&Number(t.amount)>Math.max(150,median*3.5)).sort((a,b)=>Number(b.amount)-Number(a.amount))[0]||null;
 }
 function accountsNeedingReconcile(){
   const now=Date.now();
@@ -1028,6 +1040,8 @@ function attentionItems(){
   const overdueEnd=new Date(now);overdueEnd.setDate(overdueEnd.getDate()-1);overdueEnd.setHours(23,59,59,999);
   const overdue=planOccurrencesBetween(overdueStart,overdueEnd);
   if(overdue.length)items.push({id:'overdue',level:'warn',icon:'calendar',title:`Просрочено планов: ${overdue.length}`,sub:'Проведите, перенесите или удалите событие.',action:'open-overdue'});
+  const unresolvedReconciliations=state.transactions.filter(t=>t.isAdjustment&&t.needsReview);
+  if(unresolvedReconciliations.length)items.push({id:'reconcile-review',level:'info',icon:'wallet',title:`Разобрать сверку: ${unresolvedReconciliations.length}`,sub:'Неизвестная разница уже учтена в расходах/доходах. При желании разнесите её по категориям.',action:'open-reconcile-review'});
   const over=budgetSnapshot().filter(b=>b.ratio>1);
   if(over.length)items.push({id:'budgets',level:'warn',icon:'chart',title:`Перерасход бюджетов: ${over.length}`,sub:`Самый большой — ${over[0].category?.name||'категория'}.`,action:'open-budgets'});
   const pace=budgetPaceSnapshot();
@@ -1082,6 +1096,7 @@ function handleInboxAction(action){
   if(action==='open-budgets'){closeSheet();activeTab='plan';render({motion:'none'});setTimeout(()=>document.querySelector('[data-action="add-budget"]')?.scrollIntoView({behavior:'smooth',block:'center'}),100);return}
   if(action==='open-overdue'){closeSheet();activeTab='plan';render({motion:'none'});return}
   if(action==='open-reconcile'){openAccountsManager();return}
+  if(action==='open-reconcile-review'){openReconciliationReviewSheet();return}
   if(action==='open-duplicates'){openDuplicateSheet();return}
   if(action==='open-unusual'){const t=unusualExpense();if(t)openTransactionDetail(t);return}
   if(action==='explain-free')return openExplanation('free');
@@ -1955,7 +1970,7 @@ function renderOverview(){
     </section>
 
     ${!focus?`<section class="section">
-      <div class="section-head"><h2>Мои деньги</h2><button data-action="manage-accounts">Управлять</button></div>
+      <div class="section-head"><h2>Мои деньги</h2><div class="section-head-actions"><button data-action="quick-reconcile">Сверить</button><button data-action="manage-accounts">Управлять</button></div></div>
       <div class="account-list list-surface">${state.accounts.map(a=>`<button class="account-item" data-account="${a.id}" style="width:100%;color:inherit;text-align:left"><div class="account-icon system-glyph">${accountGlyph(a.type)}</div><div class="item-main"><div class="item-title">${esc(a.name)} ${a.protected?'<span class="protected-pill">резерв</span>':''}</div><div class="item-sub">${accountTypeName(a.type)}</div></div><div class="item-amount">${fmtMajor(accountBalance(a.id))}</div></button>`).join('')}</div>
     </section>
 
@@ -1984,9 +1999,9 @@ function renderOverview(){
 function accountTypeName(type){ return ({card:'Банковская карта',bank:'Банковский счёт',cash:'Наличные',savings:'Накопительный счёт',credit:'Кредитная карта',other:'Другой счёт'})[type]||'Счёт'; }
 function txRow(t){
   const a=account(t.accountId), c=category(t.categoryId), to=account(t.toAccountId);
-  const icon=t.type==='transfer'?uiIcon('transfer'):(c?.icon||(t.type==='income'?'＋':'−'));
-  const title=t.isAdjustment?'Корректировка баланса':t.type==='transfer'?`${a?.name||'Счёт'} → ${to?.name||'Счёт'}`:(c?.name||'Без категории');
-  const sub=[fmtDate(t.date),t.note,a?.name].filter(Boolean).join(' · ');
+  const icon=t.isAdjustment?uiIcon('wallet'):t.type==='transfer'?uiIcon('transfer'):(c?.icon||(t.type==='income'?'＋':'−'));
+  const title=t.isAdjustment?(t.type==='expense'?(t.needsReview?'Расход по сверке · разобрать':'Расход по сверке'):(t.needsReview?'Доход по сверке · разобрать':'Доход по сверке')):t.type==='transfer'?`${a?.name||'Счёт'} → ${to?.name||'Счёт'}`:(c?.name||'Без категории');
+  const sub=t.isAdjustment?[fmtDate(t.date),a?.name,t.note||(t.type==='expense'?'Не распределён по категориям · учитывается в расходах':'Не распределён по категориям · учитывается в доходах')].filter(Boolean).join(' · '):[fmtDate(t.date),t.note,a?.name].filter(Boolean).join(' · ');
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
   return `<button class="tx-item" data-tx="${t.id}" style="width:100%;color:inherit;text-align:left"><div class="tx-icon ${t.type} ${t.type==='transfer'?'system-glyph':''}">${icon}</div><div class="item-main"><div class="item-title">${esc(title)}</div><div class="item-sub">${esc(sub)}</div></div><div class="item-amount ${t.type==='income'?'positive':t.type==='expense'?'expense-amount':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</div></button>`;
 }
@@ -2003,7 +2018,7 @@ function txMatchesQuery(t,raw){
   if(monthToken && (t.date||'').slice(5,7)!==months[monthToken])return false;
   const cleaned=monthToken?q.replace(monthToken,'').trim():q;
   if(!cleaned)return true;
-  const hay=[t.merchant,t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.isAdjustment?'корректировка':t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
+  const hay=[t.merchant,t.note,category(t.categoryId)?.name,account(t.accountId)?.name,account(t.toAccountId)?.name,String(t.amount||''),t.isAdjustment?(t.type==='expense'?'корректировка сверка баланс расход нераспределенный':'корректировка сверка баланс доход нераспределенный'):t.type==='expense'?'расход':t.type==='income'?'доход':'перевод'].filter(Boolean).join(' ').toLowerCase();
   return cleaned.split(/\s+/).every(part=>hay.includes(part));
 }
 function transactionGroups(txs){
@@ -2019,11 +2034,18 @@ function openTransactionDetail(t){
   if(!t)return;
   const c=category(t.categoryId),a=account(t.accountId),to=account(t.toAccountId);
   const signed=t.type==='expense'?-Number(t.amount):t.type==='income'?Number(t.amount):0;
-  openSheet(`<div class="sheet-head"><h3>Операция</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
-    <div class="detail-hero"><small>${t.isAdjustment?'Корректировка':t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
-    <div class="detail-list">${t.type==='transfer'?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`:`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>`}${t.merchant?`<div><span>Получатель</span><strong>${esc(t.merchant)}</strong></div>`:''}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}</div>
-    <div class="detail-actions ${!t.isAdjustment&&t.type!=='transfer'?'three':''}">${t.isAdjustment?'':`<button class="secondary-btn" id="detailRepeat">Повторить</button>`}${!t.isAdjustment&&t.type!=='transfer'?'<button class="secondary-btn" id="detailToPlan">В план</button>':''}<button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
+  const adjustmentDetails=t.isAdjustment
+    ?`<div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Категория</span><strong>${t.type==='expense'?'Расход по сверке':'Доход по сверке'}</strong></div><div><span>Статистика</span><strong>${t.type==='expense'?'Учитывается в общих расходах':'Учитывается в общих доходах'}</strong></div><div><span>Бюджеты категорий</span><strong>Не влияет, пока не распределено</strong></div>${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Разобрать позже</strong></div>':''}`
+    :t.type==='transfer'
+      ?`<div><span>Откуда</span><strong>${esc(a?.name||'—')}</strong></div><div><span>Куда</span><strong>${esc(to?.name||'—')}</strong></div>`
+      :`<div><span>Категория</span><strong>${esc(c?.icon||'')} ${esc(c?.name||'Без категории')}</strong></div><div><span>Счёт</span><strong>${esc(a?.name||'—')}</strong></div>${t.merchant?`<div><span>Получатель</span><strong>${esc(t.merchant)}</strong></div>`:''}${t.note?`<div><span>Комментарий</span><strong>${esc(t.note)}</strong></div>`:''}${t.needsReview?'<div><span>Статус</span><strong class="warn-text">Нужно уточнить</strong></div>':''}`;
+  openSheet(`<div class="sheet-head"><h3>${t.isAdjustment?(t.type==='expense'?'Расход по сверке':'Доход по сверке'):'Операция'}</h3><button class="sheet-close" aria-label="Закрыть">×</button></div>
+    <div class="detail-hero"><small>${t.isAdjustment?(t.type==='expense'?'Нераспределённый расход':'Нераспределённый доход'):t.type==='expense'?'Расход':t.type==='income'?'Доход':'Перевод'}</small><strong class="${t.type==='income'?'positive':''}">${t.type==='transfer'?fmt(t.amount):fmt(signed,true)}</strong><span>${esc(fmtDate(t.date))}</span></div>
+    ${t.isAdjustment?`<div class="notice subtle">${t.type==='expense'?'Эта разница считается реальным расходом месяца, но пока не относится ни к одной категории и не расходует категорийные бюджеты.':'Эта разница считается реальным доходом месяца, но пока не относится ни к одной категории.'} Разнесение позже не изменит баланс и не посчитает сумму второй раз.</div>`:''}
+    <div class="detail-list">${adjustmentDetails}</div>
+    <div class="detail-actions ${!t.isAdjustment&&t.type!=='transfer'?'three':''}">${t.isAdjustment?'<button class="secondary-btn" id="detailResolve">Разнести</button>':`<button class="secondary-btn" id="detailRepeat">Повторить</button>`}${!t.isAdjustment&&t.type!=='transfer'?'<button class="secondary-btn" id="detailToPlan">В план</button>':''}<button class="primary-btn" id="detailEdit">Изменить</button></div><button class="danger-btn" id="detailDelete">Удалить</button>`);
   $('#detailEdit').onclick=()=>t.isAdjustment?openAdjustmentTransactionSheet(t):openTransactionSheet(t,t.type);
+  const resolve=$('#detailResolve');if(resolve)resolve.onclick=()=>openResolveAdjustmentSheet(t);
   const repeat=$('#detailRepeat');if(repeat)repeat.onclick=()=>openTransactionSheet(null,t.type,t);
   const toPlan=$('#detailToPlan');if(toPlan)toPlan.onclick=()=>{const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);openPlanSheet(null,toISODate(tomorrow),{type:t.type,title:t.merchant||c?.name||'',amount:t.amount,categoryId:t.categoryId,accountId:t.accountId,frequency:'once',required:false})};
   $('#detailDelete').onclick=()=>{closeSheet();deleteTransactionWithUndo(t)};
@@ -2032,24 +2054,45 @@ function openAdjustmentTransactionSheet(t){
   if(!t?.isAdjustment)return openTransactionSheet(t,t?.type||'expense');
   const delta=t.type==='income'?Number(t.amount||0):-Number(t.amount||0);
   const a=account(t.accountId);
-  openSheet(`<div class="sheet-head"><div><h3>Изменить корректировку</h3><p class="sheet-subtitle">Корректировка влияет на баланс, но не входит в статистику доходов и расходов.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div>
-    <form id="adjustmentTxForm"><div class="field"><label>Счёт</label><input value="${esc(a?.name||'Счёт недоступен')}" disabled></div><div class="field"><label>Изменение баланса</label><input name="delta" type="number" inputmode="decimal" step="0.01" required value="${esc(delta)}"><small>Плюс увеличивает остаток, минус уменьшает.</small></div><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'Корректировка после сверки баланса')}"></div><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">Сохранить</button></form>`);
+  openSheet(`<div class="sheet-head"><div><h3>Изменить сверку</h3><p class="sheet-subtitle">Сверка меняет остаток счёта и учитывается как нераспределённый расход или доход.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div>
+    <form id="adjustmentTxForm"><div class="field"><label>Счёт</label><input value="${esc(a?.name||'Счёт недоступен')}" disabled></div><div class="field"><label>Изменение баланса</label><input name="delta" type="number" inputmode="decimal" step="0.01" required value="${esc(delta)}"><small>Минус считается расходом по сверке, плюс — доходом по сверке.</small></div><div class="field"><label>Дата</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" value="${esc(t.note||'') }" placeholder="Например: забыл внести несколько покупок"></div><label class="switch-row"><input name="needsReview" type="checkbox" ${t.needsReview?'checked':''}><span><strong>Напомнить разобрать позже</strong><small>Появится в «Требует внимания». Баланс уже будет правильным.</small></span></label><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">Сохранить</button><button class="secondary-btn" id="resolveAdjustment" type="button">Разнести по категории</button></form>`);
   $('#adjustmentTxForm').onsubmit=async e=>{
     e.preventDefault();const form=e.currentTarget,fd=new FormData(form);setFormError(form,'');
     const value=Number(fd.get('delta')),date=String(fd.get('date')||todayISO());
     if(!Number.isFinite(value)||Math.abs(value)<.005){setFormError(form,'Введите ненулевую корректировку.');return}
     if(date>todayISO()){setFormError(form,'Фактическая корректировка не может быть в будущем.');return}
     if(!account(t.accountId)){setFormError(form,'Счёт этой корректировки больше не существует. Проверьте целостность данных.');return}
-    const type=value>0?'income':'expense';
-    const fallbackCategory=type==='income'?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id);
-    if(!fallbackCategory){setFormError(form,'Нет подходящей категории для корректировки.');return}
     const previous=structuredClone(state);
-    const updated={...t,type,amount:Math.abs(value),date,categoryId:fallbackCategory,toAccountId:null,merchant:'',note:String(fd.get('note')||'').trim()||'Корректировка после сверки баланса',isAdjustment:true};
+    const updated={...t,type:value>0?'income':'expense',amount:Math.abs(value),date,categoryId:null,toAccountId:null,merchant:'',note:String(fd.get('note')||'').trim(),needsReview:fd.get('needsReview')==='on',isAdjustment:true,adjustmentKind:'reconcile'};
     state.transactions=state.transactions.map(x=>x.id===t.id?updated:x);
-    try{await persist();closeSheet();render({motion:'refresh'});showToast('Корректировка обновлена')}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить корректировку')}
+    try{await persist();closeSheet();render({motion:'refresh'});showToast('Сверка обновлена')}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить сверку')}
+  };
+  $('#resolveAdjustment').onclick=()=>openResolveAdjustmentSheet(t);
+}
+function openResolveAdjustmentSheet(t){
+  if(!t?.isAdjustment)return;
+  const a=account(t.accountId),kind=t.type==='income'?'income':'expense',max=Math.abs(Number(t.amount)||0);
+  if(!(max>.004)||!a){showToast('Эту корректировку нельзя разобрать');return}
+  const defaultCategory=state.settings.lastCategoryByType?.[kind]||state.categories.find(c=>c.type===kind)?.id||'';
+  openSheet(`<div class="sheet-head"><div><h3>Разнести сверку</h3><p class="sheet-subtitle">Уточните категорию части уже учтённого расхода/дохода. Общая сумма и остаток счёта не изменятся.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div>
+    <div class="reconcile-source-card"><span>${kind==='expense'?'Расход по сверке':'Доход по сверке'}</span><strong class="${kind==='income'?'positive':'negative'}">${fmt(kind==='income'?max:-max,true)}</strong><small>${esc(a.name)} · ${esc(fmtDate(t.date))}</small></div>
+    <form id="resolveAdjustmentForm"><div class="field"><label>Сколько удалось вспомнить</label><input name="amount" type="number" inputmode="decimal" min="0.01" max="${esc(max)}" step="0.01" required value="${esc(max.toFixed(2))}"><small>Можно разнести только часть. Остаток останется учтённым расходом/доходом по сверке.</small></div><div class="field"><label>Категория</label><select name="categoryId" required>${categoryOptions(kind,defaultCategory)}</select></div><div class="field"><label>Дата операции</label><input name="date" type="date" max="${todayISO()}" required value="${esc(t.date||todayISO())}"></div><div class="field"><label>${kind==='expense'?'Магазин / получатель':'Источник'}</label><input name="merchant" maxlength="60" placeholder="Необязательно"></div><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Что удалось вспомнить"></div><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">Разнести без изменения баланса</button></form>`);
+  $('#resolveAdjustmentForm').onsubmit=async e=>{
+    e.preventDefault();const form=e.currentTarget,fd=new FormData(form);setFormError(form,'');
+    const amount=Number(fd.get('amount')),catId=String(fd.get('categoryId')||''),date=String(fd.get('date')||todayISO());
+    if(!(amount>0)||amount>max+.005){setFormError(form,`Введите сумму от 0,01 до ${fmt(max)}.`);return}
+    if(category(catId)?.type!==kind){setFormError(form,'Выберите подходящую категорию.');return}
+    if(date>todayISO()){setFormError(form,'Фактическая операция не может быть в будущем.');return}
+    const previous=structuredClone(state),remaining=Math.max(0,max-amount),now=Date.now();
+    const realTx={id:uid(),type:kind,amount,date,accountId:t.accountId,toAccountId:null,categoryId:catId,merchant:String(fd.get('merchant')||'').trim(),note:String(fd.get('note')||'').trim(),needsReview:false,isAdjustment:false,createdAt:now};
+    state.transactions.push(realTx);
+    if(remaining<.005)state.transactions=state.transactions.filter(x=>x.id!==t.id);
+    else state.transactions=state.transactions.map(x=>x.id===t.id?{...x,amount:remaining,needsReview:true,note:x.note||'Остаток после частичного разбора сверки'}:x);
+    state.settings.lastCategoryByType={...(state.settings.lastCategoryByType||{}),[kind]:catId};
+    state.settings.lastAccountByType={...(state.settings.lastAccountByType||{}),[kind]:t.accountId};
+    try{await persist();closeSheet();render({motion:'refresh'});showToast(remaining<.005?'Сверка полностью разобрана':`Осталось разобрать ${fmt(remaining)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})})}catch(_){state=previous;render({motion:'none'});showToast('Не удалось разнести сверку')}
   };
 }
-
 function openAccountDetail(a){
   if(!a)return;
   const bal=accountBalance(a.id);const txs=state.transactions.filter(t=>t.accountId===a.id||t.toAccountId===a.id);
@@ -2057,12 +2100,35 @@ function openAccountDetail(a){
   $('#accountEdit').onclick=()=>openAccountSheet(a);
   $('#accountReconcile').onclick=()=>openReconcileSheet(a);
 }
-function openReconcileSheet(a){
-  const current=accountBalance(a.id);
-  openSheet(`<div class="sheet-head"><h3>Сверить баланс</h3><button class="sheet-close" aria-label="Закрыть">×</button></div><form id="reconcileForm"><div class="field"><label>В приложении</label><input value="${esc(current.toFixed(2))}" disabled></div><div class="field"><label>Реальный баланс</label><input id="realBalance" name="real" type="number" step="0.01" inputmode="decimal" value="${esc(current.toFixed(2))}" required></div><div class="reconcile-preview" id="reconcilePreview">Разницы нет.</div><button class="primary-btn" type="submit">Сверить</button></form>`);
-  const input=$('#realBalance'),preview=$('#reconcilePreview');
-  const update=()=>{const real=Number(input.value);const diff=real-current;preview.textContent=Math.abs(diff)<.005?'Разницы нет.':`Корректировка: ${fmt(diff,true)}`;preview.className=`reconcile-preview ${diff<0?'negative':diff>0?'positive':''}`};input.oninput=update;update();
-  $('#reconcileForm').onsubmit=async e=>{e.preventDefault();const real=Number(new FormData(e.currentTarget).get('real'));if(!Number.isFinite(real))return;const diff=real-current;const previous=structuredClone(state);state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:Date.now()}:x);if(Math.abs(diff)>=.005)state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:diff>0?(category('inc-other')?.id||state.categories.find(c=>c.type==='income')?.id):(category('exp-other')?.id||state.categories.find(c=>c.type==='expense')?.id),note:'Корректировка после сверки баланса',isAdjustment:true,createdAt:Date.now()});try{await persist();closeSheet();render({motion:'refresh'});if(Math.abs(diff)<.005)showToast('Баланс совпадает · счёт сверён');else showToast(`Баланс скорректирован на ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})})}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить сверку')}};
+function openReconcileSheet(preselected=null){
+  if(!state.accounts.length){showToast('Сначала добавьте счёт');return}
+  const initial=typeof preselected==='string'?account(preselected):preselected;
+  let selected=initial?.id||state.settings.lastReconciledAccountId||state.accounts[0]?.id;
+  if(!account(selected))selected=state.accounts[0]?.id;
+  const build=()=>{
+    const a=account(selected);if(!a)return;
+    const current=accountBalance(a.id);
+    openSheet(`<div class="sheet-head"><div><h3>Быстрая сверка</h3><p class="sheet-subtitle">Введите фактический остаток. Неизвестная разница сразу попадёт в общие расходы или доходы.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div><form id="reconcileForm"><div class="field"><label>Счёт</label><select id="reconcileAccount" name="accountId">${accountOptions(a.id)}</select></div><div class="reconcile-balance-pair"><div><span>В приложении</span><strong>${fmtMajor(current)}</strong></div><div><span>Фактически</span><strong id="reconcileActualLabel">${fmtMajor(current)}</strong></div></div><div class="field"><label>Фактический остаток</label><input id="realBalance" name="real" type="number" step="0.01" inputmode="decimal" value="${esc(current.toFixed(2))}" required></div><div class="reconcile-preview" id="reconcilePreview">Баланс совпадает.</div><div class="notice subtle">Если фактический остаток ниже, Money App создаст <b>расход по сверке</b>; если выше — <b>доход по сверке</b>. Сумма сразу учитывается в итогах месяца, но не относится к категорийным бюджетам, пока вы её не разнесёте.</div><label class="switch-row"><input name="needsReview" type="checkbox" checked><span><strong>Напомнить разобрать позже</strong><small>Если вспомните пропущенную покупку или доход, сможете заменить часть сверки настоящей операцией без повторного изменения баланса.</small></span></label><div class="field"><label>Комментарий</label><input name="note" maxlength="100" placeholder="Необязательно"></div><div class="form-error hidden" role="alert"></div><button class="primary-btn" type="submit">Сверить сейчас</button></form>`);
+    const input=$('#realBalance'),preview=$('#reconcilePreview'),actual=$('#reconcileActualLabel');
+    const update=()=>{const real=Number(input.value);if(actual&&Number.isFinite(real))actual.textContent=fmtMajor(real);const diff=real-current;preview.innerHTML=!Number.isFinite(real)?'Введите фактический остаток.':Math.abs(diff)<.005?'<strong>Баланс совпадает</strong><span>Корректировка не потребуется.</span>':`<strong>${diff<0?'В приложении денег больше':'В приложении денег меньше'} на ${esc(fmtMajor(Math.abs(diff)))}</strong><span>${diff<0?`Будет создан расход по сверке ${esc(fmt(Math.abs(diff)))}.`:`Будет создан доход по сверке ${esc(fmt(Math.abs(diff)))}.`} Сумма сразу войдёт в итог месяца.</span>`;preview.className=`reconcile-preview reconcile-preview-rich ${diff<0?'negative':diff>0?'positive':''}`};
+    input.oninput=update;update();
+    $('#reconcileAccount').onchange=e=>{selected=e.target.value;state.settings.lastReconciledAccountId=selected;build()};
+    $('#reconcileForm').onsubmit=async e=>{
+      e.preventDefault();const form=e.currentTarget,fd=new FormData(form),real=Number(fd.get('real'));setFormError(form,'');
+      if(!Number.isFinite(real)){setFormError(form,'Введите фактический остаток.');return}
+      const diff=real-current,previous=structuredClone(state),now=Date.now();
+      state.accounts=state.accounts.map(x=>x.id===a.id?{...x,lastReconciledAt:now}:x);
+      state.settings.lastReconciledAccountId=a.id;
+      if(Math.abs(diff)>=.005)state.transactions.push({id:uid(),type:diff>0?'income':'expense',amount:Math.abs(diff),date:todayISO(),accountId:a.id,toAccountId:null,categoryId:null,merchant:'',note:String(fd.get('note')||'').trim(),needsReview:fd.get('needsReview')==='on',isAdjustment:true,adjustmentKind:'reconcile',createdAt:now});
+      try{await persist();closeSheet();render({motion:'refresh'});if(Math.abs(diff)<.005)showToast('Баланс совпадает · счёт сверён');else showToast(`Счёт приведён к факту · ${fmt(diff,true)}`,'Отменить',async()=>{state=previous;await persist();render({motion:'refresh'})})}catch(_){state=previous;render({motion:'none'});showToast('Не удалось сохранить сверку')}
+    };
+  };
+  build();
+}
+function openReconciliationReviewSheet(){
+  const rows=state.transactions.filter(t=>t.isAdjustment&&t.needsReview).sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
+  openSheet(`<div class="sheet-head"><div><h3>Разобрать сверки</h3><p class="sheet-subtitle">Разницы уже учтены в общих расходах/доходах. Здесь можно постепенно распределить их по настоящим категориям.</p></div><button class="sheet-close" aria-label="Закрыть">×</button></div>${rows.length?`<div class="tx-list list-surface">${rows.map(txRow).join('')}</div>`:'<div class="empty-inline"><strong>Неразобранных сверок нет</strong><span>Все корректировки уже разобраны или не требуют внимания.</span></div>'}`);
+  $$('[data-tx]', $('#sheet')).forEach(b=>b.onclick=()=>openTransactionDetail(state.transactions.find(t=>t.id===b.dataset.tx)));
 }
 function openPlanDetail(p){
   if(!p)return;
@@ -2098,7 +2164,7 @@ function openQuickCapture(){
 
 function renderTransactions(){
   let txs=[...state.transactions].sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.createdAt||0)-(a.createdAt||0));
-  if(txFilter!=='all') txs=txs.filter(t=>!t.isAdjustment&&t.type===txFilter);
+  if(txFilter!=='all') txs=txs.filter(t=>t.type===txFilter);
   if(txSearch.trim()) txs=txs.filter(t=>txMatchesQuery(t,txSearch));
   $('#main').innerHTML=`
     <div class="tx-search"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></svg><input id="txSearchInput" type="search" placeholder="Поиск: REWE, продукты, карта…" value="${esc(txSearch)}"></div>
@@ -2426,9 +2492,10 @@ function runIntegrityCheck(){
     if(!['income','expense','transfer'].includes(t.type))add('Операция с неизвестным типом');
     if(!(Number(t.amount)>0))add('Операция с некорректной суммой');
     if(!t.accountId||!accountIds.has(t.accountId))add('Операция с удалённым или отсутствующим счётом');
-    if(t.type!=='transfer'){
+    if(t.type!=='transfer'&&!t.isAdjustment){
       const c=category(t.categoryId);if(!c)add('Операция без корректной категории');else if(c.type!==t.type)add('Категория операции не соответствует её типу');
     }
+    if(t.isAdjustment&&t.toAccountId)add('Корректировка баланса содержит счёт назначения');
     if(t.type==='transfer'){
       if(!t.toAccountId||!accountIds.has(t.toAccountId))add('Перевод без корректного счёта назначения');
       if(t.accountId===t.toAccountId)add('Перевод на тот же счёт');
@@ -2569,6 +2636,7 @@ function renderMore(){
     </section>
     <section class="section first-section"><div class="section-head"><h2>Основные</h2></div>${rows([
       row('wallet','Счета и кошельки',`${state.accounts.length} счетов · ${protectedCount} защищённых`,'manage-accounts'),
+      row('transfer','Быстрая сверка','Ввести фактический остаток без выбора категории','quick-reconcile'),
       row('tag','Категории','Доходы и расходы','manage-categories'),
       row('shield','Финансовая подушка',`${fmtMajor(explicitReserve())} · горизонт ${safetyHorizonDays()} дн.`,'reserve'),
       row('info','Требует внимания',att.length?'Есть пункты для проверки':'Всё в порядке','open-inbox',att.length?String(att.length):'')
@@ -2634,6 +2702,7 @@ function bindCommonActions(){
   $$('[data-action="quick-transfer"]').forEach(b=>b.onclick=()=>openTransactionSheet(null,'transfer'));
   $$('[data-action="quick-plan"], [data-action="add-plan"]').forEach(b=>b.onclick=()=>openPlanSheet());
   $$('[data-action="manage-accounts"]').forEach(b=>b.onclick=openAccountsManager);
+  $$('[data-action="quick-reconcile"]').forEach(b=>b.onclick=()=>openReconcileSheet());
   $$('[data-action="manage-categories"]').forEach(b=>b.onclick=openCategoriesManager);
   $$('[data-action="add-budget"]').forEach(b=>b.onclick=()=>openBudgetSheet());
   $$('[data-action="suggest-budgets"]').forEach(b=>b.onclick=openBudgetSuggestions);
@@ -3323,7 +3392,7 @@ async function exportJSON(){
 }
 function exportCSV(){
   const rows=[['date','type','amount','category','account','to_account','comment']];
-  [...state.transactions].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(t=>rows.push([t.date,t.isAdjustment?'adjustment':t.type,t.amount,t.isAdjustment?'':(category(t.categoryId)?.name||''),account(t.accountId)?.name||'',account(t.toAccountId)?.name||'',t.note||'']));
+  [...state.transactions].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(t=>rows.push([t.date,t.isAdjustment?(t.type==='expense'?'reconcile_expense':'reconcile_income'):t.type,t.amount,t.isAdjustment?(t.type==='expense'?'Расход по сверке':'Доход по сверке'):(category(t.categoryId)?.name||''),account(t.accountId)?.name||'',account(t.toAccountId)?.name||'',t.note||'']));
   const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`money-operations-${todayISO()}.csv`);showToast('CSV создан');
 }
 async function clearAllData(){

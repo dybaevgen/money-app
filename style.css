@@ -4591,3 +4591,30 @@ button,
 
 /* Guard against 1–4 px intrinsic overflow on very narrow Android/Fold widths. */
 #main{overflow-x:clip!important}
+
+/* =========================================================
+   V9.1 — Personal quick reconciliation
+   Category-free balance correction + later classification
+   ========================================================= */
+.section-head-actions{display:flex;align-items:center;gap:8px;min-width:0}
+.section-head-actions button{white-space:nowrap}
+.reconcile-balance-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:2px 0 14px}
+.reconcile-balance-pair>div{min-width:0;padding:13px 14px;border:1px solid var(--line-soft);border-radius:16px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:5px}
+.reconcile-balance-pair span,.reconcile-source-card span,.reconcile-source-card small{color:var(--muted);font-size:10px}
+.reconcile-balance-pair strong{font-size:18px;line-height:1.1;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reconcile-preview-rich{display:flex;flex-direction:column;gap:4px;text-align:left!important;padding:12px 13px!important}
+.reconcile-preview-rich strong{font-size:11px;color:var(--text)}
+.reconcile-preview-rich span{font-size:9px;line-height:1.45;color:var(--muted)}
+.reconcile-preview-rich.negative{background:rgba(255,126,141,.055);border:1px solid rgba(255,126,141,.13)}
+.reconcile-preview-rich.positive{background:rgba(93,215,169,.055);border:1px solid rgba(93,215,169,.13)}
+.reconcile-source-card{margin:2px 0 15px;padding:16px;border:1px solid var(--line-soft);border-radius:18px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px}
+.reconcile-source-card strong{font-size:26px;line-height:1.05;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.reconcile-source-card strong.negative{color:var(--expense)}
+.reconcile-source-card strong.positive{color:var(--income)}
+@media(max-width:390px){
+  .section-head-actions{gap:5px}
+  .section-head-actions button{padding-left:7px;padding-right:7px;font-size:9px}
+  .reconcile-balance-pair{gap:7px}
+  .reconcile-balance-pair>div{padding:11px 10px}
+  .reconcile-balance-pair strong{font-size:16px}
+}
